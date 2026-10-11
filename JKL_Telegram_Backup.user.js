@@ -882,6 +882,9 @@
       '<button id="jkl-tg-diag" type="button" style="cursor:pointer;padding:7px;',
       'border:1px solid #50758b;border-radius:7px;background:transparent;color:#eaf4ff">',
       'Copier diagnostic</button>',
+      '<button id="jkl-tg-copy-errors" type="button" style="cursor:pointer;padding:7px;',
+      'margin:6px;border:1px solid #50758b;border-radius:7px;',
+      'background:transparent;color:#eaf4ff">Copier rapport du backup</button>',
       '<a id="jkl-tg-webk" href="https://web.telegram.org/k/"',
       ' style="display:none;margin-top:8px;color:#97dcff">',
       'Ouvrir Telegram WebK</a>',
@@ -904,7 +907,8 @@
       const active = Boolean(bulkJob);
       allButton.disabled = active;
       stopButton.disabled = !active || bulkJob?.cancelled;
-      bulkLabel.textContent = job ? bulkText(job) : 'Prêt : ouvre un canal puis clique sur Tout récupérer.';
+      bulkLabel.textContent = job ? bulkText(job) :
+        (reportForOpenChat() || 'Prêt : ouvre un canal puis clique sur Tout récupérer.');
       bulkProgress.style.display = active ? 'block' : 'none';
       if (active) bulkProgress.removeAttribute('value');
     };
@@ -936,6 +940,7 @@
       panel.style.display = panel.hidden ? 'none' : 'block';
       toggle.setAttribute('aria-expanded', String(!panel.hidden));
       refresh();
+      if (!bulkJob) renderBulkProgress(null);
     });
     panel.style.display = 'none';
     root.querySelector('#jkl-tg-solo').addEventListener('click', async () => {
@@ -954,6 +959,17 @@
     allButton.addEventListener('click', () => { void backupAll(); });
     stopButton.addEventListener('click', stopBackup);
     renderBulkProgress(lastBulkResult);
+    root.querySelector('#jkl-tg-copy-errors').addEventListener('click', async () => {
+      const report = reportForOpenChat();
+      if (!report) return toast('Aucun rapport pour cette conversation.', true);
+      try {
+        await navigator.clipboard.writeText(report);
+        toast('Rapport du backup copié.');
+      } catch {
+        console.info(PREFIX, 'Rapport backup', report);
+        toast('Rapport affiché dans la console F12.', true);
+      }
+    });
     root.querySelector('#jkl-tg-diag').addEventListener('click', async () => {
       const report = diagnostics();
       try {
