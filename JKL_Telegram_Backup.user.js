@@ -302,6 +302,64 @@
     ].join('\n');
   }
 
+  function installDrag(root, handle, panel) {
+    const key = 'jkl-tg-backup-dock-position-v1';
+    const position = (x, y) => {
+      const rect = root.getBoundingClientRect();
+      const width = Math.max(rect.width, panel.hidden ? 0 : (panel.offsetWidth || 316));
+      const height = panel.hidden ? rect.height : 42 + (panel.offsetHeight || 250);
+      const clamp = (value, limit) => Math.max(8, Math.min(value, Math.max(8, limit - 8)));
+      root.style.left = clamp(x, window.innerWidth - width) + 'px';
+      root.style.top = clamp(y, window.innerHeight - height) + 'px';
+      root.style.transform = 'none';
+    };
+    const save = () => {
+      try {
+        localStorage.setItem(key, JSON.stringify({
+          x: parseFloat(root.style.left), y: parseFloat(root.style.top)
+        }));
+      } catch (err) { console.warn(PREFIX, 'Position non enregistrée', err); }
+    };
+    try {
+      const p = JSON.parse(localStorage.getItem(key) || 'null');
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) position(p.x, p.y);
+    } catch (err) { console.warn(PREFIX, 'Position non restaurée', err); }
+    let drag = null;
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      delete handle.dataset.jklDragClick;
+      const rect = root.getBoundingClientRect();
+      drag = { id:e.pointerId, x:e.clientX, y:e.clientY,
+        left:rect.left, top:rect.top, moved:false };
+      handle.setPointerCapture?.(e.pointerId);
+    });
+    handle.addEventListener('pointermove', e => {
+      if (!drag || drag.id !== e.pointerId) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true;
+      e.preventDefault();
+      position(drag.left + dx, drag.top + dy);
+    });
+    const finish = e => {
+      if (!drag || drag.id !== e.pointerId) return;
+      if (drag.moved) {
+        handle.dataset.jklDragClick = '1';
+        save();
+      }
+      drag = null;
+      if (handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+    };
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+    window.addEventListener?.('resize', () => {
+      if (root.style.transform === 'none') {
+        position(parseFloat(root.style.left), parseFloat(root.style.top));
+        save();
+      }
+    });
+  }
+
   function mountDock() {
     if (typeof document.createElement !== 'function' || !document.body?.appendChild) return;
     if (document.getElementById('jkl-tg-dock')) return;
@@ -316,11 +374,11 @@
     ].join(';');
     root.innerHTML = [
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
-      ' style="cursor:pointer;border:1px solid #6faec9;background:#183d54;',
+      ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
       '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.2</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
-      'left:50%;top:42px;transform:translateX(-50%);width:316px;',
+      'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
       'background:#142b39;border:1px solid #557083;line-height:1.45">',
       '<strong>JKL Telegram Backup</strong>',
@@ -360,7 +418,12 @@
       webk.href = 'https://web.telegram.org/k/' + location.hash;
     };
     refreshDock = refresh;
+    installDrag(root, toggle, panel);
     toggle.addEventListener('click', () => {
+      if (toggle.dataset.jklDragClick === '1') {
+        delete toggle.dataset.jklDragClick;
+        return;
+      }
       panel.hidden = !panel.hidden;
       panel.style.display = panel.hidden ? 'none' : 'block';
       toggle.setAttribute('aria-expanded', String(!panel.hidden));
