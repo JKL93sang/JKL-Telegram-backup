@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.1.5
+// @version      0.2.0
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -19,7 +19,7 @@
 // ==/UserScript==
 
 /*
- * v0.1.5 - prototype WebK, sans dependances ni serveur tiers.
+ * v0.2.0 - prototype WebK, sans dependances ni serveur tiers.
  * Exploite downloadToDisc({ media, fileName }) de Telegram WebK.
  * Les messages doivent etre accessibles dans la session Telegram ouverte.
  * Limites: pas de scan historique, pas de controle des doublons, pas d'album
@@ -35,9 +35,16 @@
   const GAP_MS = 550;
   // Blob downloads consume memory: never silently save unrenamed large files.
   const MAX_RENAMED_BYTES = 512 * 1024 * 1024;
+  const HISTORY_PAGE_SIZE = 75;
+  const HISTORY_PAGE_GAP_MS = 600;
+  const HISTORY_FILTERS = [
+    'inputMessagesFilterPhotoVideo', 'inputMessagesFilterDocument'
+  ];
   let pending = null;
   let running = false;
   let toastTimer = null;
+  let bulkJob = null;
+  let renderBulkProgress = null;
 
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -88,13 +95,21 @@
     const orig = String(doc.file_name || attributes.find(a => a?._ === 'documentAttributeFilename')?.file_name || '');
     const isVideo = mime.startsWith('video/') || attributes.some(a => a?._ === 'documentAttributeVideo');
     const isGif = mime === 'image/gif';
-    if (!isVideo && !isGif) return null;
+    const isImage = mime.startsWith('image/') && !doc.sticker && !doc.pFlags?.sticker;
+    if (!isVideo && !isGif && !isImage) return null;
 
     const extMatch = orig.match(/\.([a-z0-9]{2,6})$/i);
-    const acceptable = new Set(['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'gif']);
+    const acceptable = new Set(['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'gif', 'jpg', 'jpeg', 'png', 'webp', 'heic', 'heif', 'bmp']);
     let ext = extMatch && acceptable.has(extMatch[1].toLowerCase()) ? extMatch[1].toLowerCase() : '';
-    if (!ext) ext = isGif ? 'gif' : ({ 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv' }[mime] || 'mp4');
-    return { media: doc, type: isGif ? 'GIF' : 'VIDEO', ext, originalName: orig || null };
+    if (!ext) {
+      ext = ({
+        'image/gif': 'gif', 'image/png': 'png', 'image/jpeg': 'jpg',
+        'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif',
+        'image/bmp': 'bmp', 'video/webm': 'webm',
+        'video/quicktime': 'mov', 'video/x-matroska': 'mkv'
+      })[mime] || (isImage ? 'jpg' : 'mp4');
+    }
+    return { media: doc, type: isGif ? 'GIF' : isImage ? 'PHOTO' : 'VIDEO', ext, originalName: orig || null };
   }
 
   function currentChatLabel() {
@@ -219,7 +234,7 @@
     return valid.length ? valid[valid.length - 1] : null;
   }
 
-  async function saveMessage(msg, peerId) {
+  async function saveMessage(msg, peerId, profileOverride) {
     const info = getMediaInfo(msg);
     if (!info) return { skipped: true };
 
@@ -234,7 +249,7 @@
     if (mode === 'native' || mode === 'disabled') {
       throw new Error('Pour créer les dossiers : Tampermonkey → Téléchargements → Browser API.');
     }
-    const profile = currentChatLabel();
+    const profile = profileOverride || currentChatLabel();
     const name = fileName(msg, info, profile);
     const path = profileDownloadPath(profile, name);
     const photoSize = info.media._ === 'photo' ? largestPhotoSize(info.media) : null;
@@ -330,6 +345,258 @@
       button.disabled = false;
       button.textContent = originalLabel;
     }
+  }
+
+
+  function bulkContext() {
+    if (!isWebK()) throw new Error('Backup complet : ouvre Telegram WebK (/k/).');
+    const chat = page.appImManager?.chat;
+    const peerId = chat?.peerId;
+    if (peerId === undefined || peerId === null || peerId === '') {
+      throw new Error('Aucune conversation Telegram ouverte.');
+    }
+    const manager = chat?.managers?.appMessagesManager ||
+      page.appImManager?.managers?.appMessagesManager;
+    if (typeof manager?.getHistory !== 'function') {
+      throw new Error('API historique WebK indisponible : aucun scan lancé.');
+    }
+    if (typeof page.appDownloadManager?.downloadMedia !== 'function' ||
+        typeof GM_download !== 'function' || gmDownloadMode().toLowerCase() !== 'browser') {
+      throw new Error('Pour télécharger : moteur Blob + Tampermonkey Browser API requis.');
+    }
+    // A forum thread has its own search context, unlike the channel's main feed.
+    const threadId = Number(chat.threadId) || undefined;
+    const profile = currentChatLabel();
+    if (profile === 'Telegram') {
+      throw new Error('Titre du chat introuvable : le backup complet refuse le dossier générique.');
+    }
+    return { peerId, threadId, profile, manager };
+  }
+
+  function ledgerKey(ctx) {
+    return 'JKL_TG_OK_V1:' + String(ctx.peerId) + ':' + String(ctx.threadId || 0);
+  }
+
+  function loadLedger(ctx) {
+    const stored = localStorage.getItem(ledgerKey(ctx));
+    if (!stored) return new Set();
+    const parsed = JSON.parse(stored);
+    if (!Array.isArray(parsed) || parsed.some(x => typeof x !== 'string')) {
+      throw new Error('Historique anti-doublons invalide. Aucun téléchargement lancé.');
+    }
+    return new Set(parsed);
+  }
+
+  function mediaIdentity(msg, info, ctx) {
+    const peer = msg.peerId ?? ctx.peerId;
+    const mid = msg.mid ?? msg.id;
+    return String(peer) + ':' + String(mid) + ':' +
+      String(info.media.id ?? info.media.access_hash ?? '');
+  }
+
+  function saveLedger(ctx, ledger) {
+    // Keep the in-memory ledger even if browser storage reaches its quota, but
+    // report failure so we never promise safe resume across browser restarts.
+    try {
+      localStorage.setItem(ledgerKey(ctx), JSON.stringify([...ledger]));
+      return true;
+    } catch (err) {
+      console.warn(PREFIX, 'Manifeste anti-doublons non persisté', err);
+      return false;
+    }
+  }
+
+  function assertCurrentChat(ctx) {
+    const current = page.appImManager?.chat;
+    if (String(current?.peerId) !== String(ctx.peerId) ||
+        Number(current?.threadId || 0) !== Number(ctx.threadId || 0)) {
+      throw new Error('Conversation changée : backup interrompu pour éviter les mélanges.');
+    }
+  }
+
+  // The WebK shared-media view uses this exact getHistory cursor/filter contract.
+  // top=true is the ONLY evidence we have reached the oldest available message.
+  async function fetchMediaPage(ctx, filter, cursor) {
+    const options = {
+      peerId: ctx.peerId,
+      threadId: ctx.threadId,
+      inputFilter: {_: filter},
+      offsetId: cursor?.mid || 0,
+      offsetPeerId: cursor?.peerId || undefined,
+      limit: HISTORY_PAGE_SIZE
+    };
+    const result = await ctx.manager.getHistory(options);
+    if (!result || !Array.isArray(result.history)) {
+      throw new Error('Page historique invalide (filtre ' + filter + ').');
+    }
+    const messages = Array.isArray(result.messages) ? result.messages.filter(Boolean) : [];
+    if (messages.length !== result.history.length) {
+      const lookup = page.mtprotoMessagePort?.getMessageByPeer;
+      if (typeof lookup === 'function') {
+        const found = new Set(messages.map(msg => String(msg.peerId) + ':' + String(msg.mid)));
+        for (const mid of result.history) {
+          const key = String(ctx.peerId) + ':' + String(mid);
+          if (found.has(key)) continue;
+          const message = await lookup.call(page.mtprotoMessagePort, ctx.peerId, Number(mid));
+          if (message && typeof message === 'object' && message.mid != null) {
+            messages.push(message);
+          }
+        }
+      }
+    }
+    const last = messages.length ? messages[messages.length - 1] : null;
+    const rawLast = result.history.length ? result.history[result.history.length - 1] : null;
+    const next = last
+      ? {peerId: last.peerId ?? ctx.peerId, mid: last.mid}
+      : rawLast != null ? {peerId: ctx.peerId, mid: rawLast} : null;
+    return { messages, next, rawCount: result.history.length,
+      isTopEnd: result.isEnd?.top === true,
+      expected: Number.isFinite(result.count) ? result.count : null };
+  }
+
+  function bulkText(job) {
+    return [
+      job.stage,
+      'Conversation : ' + job.ctx.profile,
+      'Pages lues : ' + job.pages,
+      'Médias trouvés : ' + job.found,
+      'Enregistrés : ' + job.done + ' | Déjà faits : ' + job.skipped,
+      'Erreurs : ' + job.errors + ' | Filtres terminés : ' + job.finished + '/' + HISTORY_FILTERS.length,
+      job.detail || ''
+    ].join('\n');
+  }
+
+  function bulkStatus(job) {
+    job && renderBulkProgress?.(job);
+  }
+
+  async function backupAll() {
+    if (running || bulkJob) return toast('Un téléchargement JKL est déjà en cours.', true);
+    let ctx;
+    let ledger;
+    try {
+      ctx = bulkContext();
+      ledger = loadLedger(ctx);
+    } catch (err) {
+      toast('Backup complet : ' + (err.message || err), true);
+      return;
+    }
+    const job = bulkJob = {
+      ctx, cancelled:false, stage:'Préparation du scan…', detail:'',
+      pages:0, found:0, done:0, skipped:0, errors:0,
+      finished:0, seen:new Set(), ledger, ledgerSafe:true, complete:false
+    };
+    running = true;
+    bulkStatus(job);
+    try {
+      // Two searches are intentional: PhotoVideo for media and Document for
+      // images/videos sent as original files, plus GIFs, with ID deduplication.
+      for (const filter of HISTORY_FILTERS) {
+        if (job.cancelled) break;
+        let cursor = null, failures = 0, endReached = false;
+        for (let n = 0; n < 20000; n++) {
+          if (job.cancelled) break;
+          assertCurrentChat(ctx);
+          job.stage = filter === HISTORY_FILTERS[0]
+            ? 'Scan + téléchargement · photos / vidéos'
+            : 'Scan + téléchargement · fichiers médias / GIF';
+          job.detail = 'Page ' + (n + 1) + ' du filtre actuel…';
+          bulkStatus(job);
+
+          let pageData;
+          try {
+            pageData = await fetchMediaPage(ctx, filter, cursor);
+          } catch (err) {
+            throw new Error('Historique inaccessible : ' + (err.message || err));
+          }
+          job.pages++;
+          if (pageData.expected != null) {
+            job.detail = 'Messages correspondant au filtre : ' + pageData.expected;
+          }
+          if (pageData.rawCount && !pageData.messages.length) {
+            throw new Error('Messages non hydratés par WebK ; scan incomplet.');
+          }
+
+          for (const msg of pageData.messages) {
+            if (job.cancelled) break;
+            assertCurrentChat(ctx);
+            const info = getMediaInfo(msg);
+            if (!info) continue;
+            const key = mediaIdentity(msg, info, ctx);
+            if (job.seen.has(key)) continue;
+            job.seen.add(key);
+            job.found++;
+            if (ledger.has(key)) {
+              job.skipped++;
+              bulkStatus(job);
+              continue;
+            }
+            job.detail = 'Message #' + String(msg.mid) + ' · ' + info.type;
+            bulkStatus(job);
+            try {
+              await saveMessage(msg, msg.peerId ?? ctx.peerId, ctx.profile);
+              ledger.add(key);
+              job.ledgerSafe = saveLedger(ctx, ledger) && job.ledgerSafe;
+              job.done++;
+            } catch (err) {
+              job.errors++;
+              console.error(PREFIX, 'Backup message échoué', key, err);
+              job.detail = 'Échec #' + String(msg.mid) + ' : ' + (err.message || err);
+            }
+            bulkStatus(job);
+            if (!job.cancelled) await delay(GAP_MS);
+          }
+
+          if (job.cancelled) break;
+          if (pageData.isTopEnd) {
+            endReached = true;
+            break;
+          }
+          if (!pageData.next ||
+              (cursor && String(pageData.next.mid) === String(cursor.mid) &&
+              String(pageData.next.peerId) === String(cursor.peerId))) {
+            failures++;
+            if (failures >= 2) {
+              throw new Error('Pagination bloquée avant la fin : scan incomplet.');
+            }
+          } else {
+            failures = 0;
+            cursor = pageData.next;
+          }
+          await delay(HISTORY_PAGE_GAP_MS);
+        }
+        if (endReached) job.finished++;
+        else if (!job.cancelled) throw new Error('Plafond de pagination atteint : scan incomplet.');
+      }
+      job.complete = !job.cancelled && job.finished === HISTORY_FILTERS.length &&
+        job.errors === 0 && job.ledgerSafe;
+      job.stage = job.cancelled ? 'Arrêté · reprise possible'
+        : job.complete ? 'Terminé · historique accessible parcouru'
+          : 'Parcours terminé avec réserves';
+      job.detail = !job.ledgerSafe ? 'Attention : historique anti-doublons non conservé sur disque.'
+        : job.errors ? 'Des médias ont échoué : relancer pour réessayer les échecs.'
+          : job.cancelled ? 'Relancer pour reprendre (déjà téléchargés ignorés).'
+            : 'Tous les filtres ont atteint la fin de leur historique accessible.';
+      toast(job.stage + ' · ' + job.done + ' enregistrés, ' + job.errors + ' erreurs.',
+        !job.complete);
+    } catch (err) {
+      job.stage = 'Incomplet · interruption';
+      job.detail = String(err.message || err);
+      console.error(PREFIX, 'Backup incomplet', err);
+      toast('Backup incomplet : ' + job.detail, true);
+    } finally {
+      bulkStatus(job);
+      running = false;
+      bulkJob = null;
+      renderBulkProgress?.(job);
+    }
+  }
+
+  function stopBackup() {
+    if (!bulkJob) return;
+    bulkJob.cancelled = true;
+    bulkJob.stage = 'Arrêt demandé · fin du fichier en cours…';
+    bulkStatus(bulkJob);
   }
 
   function addContextAction(menu) {
@@ -434,7 +701,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.1.5',
+      'JKL Telegram Backup v0.2.0',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
@@ -520,7 +787,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.5</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.0</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
@@ -600,8 +867,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.1.5';
-    console.info(PREFIX, 'Panneau v0.1.5 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.2.0';
+    console.info(PREFIX, 'Panneau v0.2.0 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -622,7 +889,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.1.5 pret (WebK).`);
+    console.info(`${PREFIX} v0.2.0 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
