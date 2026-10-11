@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.1.2
+// @version      0.1.3
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -16,7 +16,7 @@
 // ==/UserScript==
 
 /*
- * v0.1.2 - prototype WebK, sans dependances ni serveur tiers.
+ * v0.1.3 - prototype WebK, sans dependances ni serveur tiers.
  * Exploite downloadToDisc({ media, fileName }) de Telegram WebK.
  * Les messages doivent etre accessibles dans la session Telegram ouverte.
  * Limites: pas de scan historique, pas de controle des doublons, pas d'album
@@ -49,6 +49,20 @@
     return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name) ? `_${name}` : name;
   }
 
+  // Windows-safe filename component; preserve readable spaces and accents.
+  function filePart(value, fallback = 'inconnu', maxLen = 110) {
+    const cleaned = String(value ?? '')
+      .normalize('NFKC')
+      .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, '_')
+      .replace(/\s+/g, ' ')
+      .replace(/[. ]+$/g, '')
+      .replace(/^[. ]+/g, '')
+      .slice(0, maxLen).trim();
+    const result = cleaned || fallback;
+    return /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(result)
+      ? '_' + result : result;
+  }
+
   function dateStamp(seconds) {
     if (!Number.isFinite(Number(seconds)) || Number(seconds) <= 0) return 'date-inconnue';
     const d = new Date(Number(seconds) * 1000);
@@ -60,7 +74,7 @@
   function getMediaInfo(msg) {
     if (!msg || !msg.media) return null;
     const photo = msg.media.photo;
-    if (photo && photo._ === 'photo') return { media: photo, type: 'PHOTO', ext: 'jpg' };
+    if (photo && photo._ === 'photo') return { media: photo, type: 'PHOTO', ext: 'jpg', originalName: null };
 
     const doc = msg.media.document;
     if (!doc || doc._ !== 'document') return null;
@@ -75,7 +89,7 @@
     const acceptable = new Set(['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'gif']);
     let ext = extMatch && acceptable.has(extMatch[1].toLowerCase()) ? extMatch[1].toLowerCase() : '';
     if (!ext) ext = isGif ? 'gif' : ({ 'video/webm': 'webm', 'video/quicktime': 'mov', 'video/x-matroska': 'mkv' }[mime] || 'mp4');
-    return { media: doc, type: isGif ? 'GIF' : 'VIDEO', ext };
+    return { media: doc, type: isGif ? 'GIF' : 'VIDEO', ext, originalName: orig || null };
   }
 
   function currentChatLabel() {
@@ -88,18 +102,30 @@
     for (const selector of selectors) {
       const el = document.querySelector(selector);
       const label = el?.textContent?.trim();
-      if (label) return sanitize(label, 'chat');
+      if (label) return filePart(label, 'Telegram', 70);
     }
     return 'Telegram';
   }
 
-  function fileName(msg, mediaInfo, peerId) {
+  function fileName(msg, mediaInfo) {
     const mid = msg.mid ?? msg.id;
     if (mid === undefined || mid === null || mid === '') throw new Error('ID de message indisponible.');
-    const peer = peerId ?? msg.peerId ?? msg.peer_id?.channel_id ?? msg.peer_id?.chat_id ?? msg.peer_id?.user_id;
-    const safeMid = sanitize(mid, 'id');
-    const safePeer = sanitize(peer, 'peer');
-    return `${currentChatLabel()}_${safePeer}_${dateStamp(msg.date)}_${mediaInfo.type}_${safeMid}.${mediaInfo.ext}`;
+    const source = currentChatLabel();
+    const extension = mediaInfo.ext;
+    let originalBase;
+    if (mediaInfo.originalName) {
+      // Telegram can provide the original file name for videos/documents.
+      // Reject directory prefixes and dangerous/nonmedia extensions.
+      const basename = String(mediaInfo.originalName).split(/[\\/]/).pop();
+      const recognized = /\.([a-z0-9]{2,6})$/i.exec(basename || '');
+      const baseWithoutExt = recognized ? basename.slice(0, -recognized[0].length) : basename;
+      originalBase = filePart(baseWithoutExt, mediaInfo.type.toLowerCase() + '_' + mid, 120);
+    } else {
+      // Regular Telegram photos do not normally expose their original name.
+      originalBase = filePart(mediaInfo.type.toLowerCase() + '_' + mid);
+    }
+    const result = `${source} - ${dateStamp(msg.date)} - ${originalBase}.${extension}`;
+    return result;
   }
 
   function toast(text, isError = false) {
@@ -136,7 +162,7 @@
     if (!info) return { skipped: true };
     const nativeDownload = page.appDownloadManager?.downloadToDisc;
     if (typeof nativeDownload !== 'function') throw new Error('Moteur de telechargement WebK indisponible.');
-    const name = fileName(msg, info, peerId);
+    const name = fileName(msg, info);
     await nativeDownload.call(page.appDownloadManager, { media: info.media, fileName: name });
     return { skipped: false, name };
   }
@@ -148,7 +174,7 @@
       const msg = getMessage(ref.peerId, ref.mid);
       const result = await saveMessage(msg, ref.peerId);
       if (result.skipped) throw new Error('Ce message ne contient pas une photo ou une video prise en charge.');
-      toast(`Telechargement demande : ${result.name}`);
+      toast(`JKL : fichier demandé sous le nom ${result.name}`);
       console.info(PREFIX, 'Fichier envoye au navigateur :', result.name);
     } catch (err) {
       toast(`Echec : ${err.message || String(err)}`, true);
@@ -210,15 +236,22 @@
     action.id = 'jkl-tg-single';
     action.className = 'btn-menu-item rp-overflow';
     action.style.cursor = 'pointer';
+    action.setAttribute('role', 'menuitem');
     const icon = document.createElement('span');
     icon.className = 'btn-menu-item-icon';
     icon.textContent = '↓';
     const label = document.createElement('span');
     label.className = 'btn-menu-item-text';
-    label.textContent = 'Télécharger (JKL, renommé)';
+    label.textContent = 'JKL Backup · Télécharger + renommer';
     action.append(icon, label);
-    const ref = { ...pending };
-    action.addEventListener('click', () => { void saveSingle(ref); });
+    // Context menus may be reused: never hold a stale message reference.
+    action.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const ref = pending ? {...pending} : null;
+      if (!ref) return toast('JKL : média ciblé introuvable.', true);
+      void saveSingle(ref);
+    });
     native.parentElement.insertBefore(action, native);
   }
 
@@ -237,6 +270,8 @@
   }
 
   function captureTarget(target) {
+    const mediaRef = readRef(target);
+    if (mediaRef) { pending = mediaRef; return; }
     const bubble = target instanceof Element ? target.closest('[data-mid]') : null;
     if (!bubble) { pending = null; return; }
     const peerId = bubble.dataset.peerId || bubble.closest('[data-peer-id]')?.dataset.peerId || page.appImManager?.chat?.peerId;
@@ -292,7 +327,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.1.2',
+      'JKL Telegram Backup v0.1.3',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur natif : ' + yes(typeof page.appDownloadManager?.downloadToDisc === 'function'),
@@ -376,7 +411,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.2</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.3</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
@@ -397,7 +432,8 @@
       ' style="display:none;margin-top:8px;color:#97dcff">',
       'Ouvrir Telegram WebK</a>',
       '<div style="margin-top:9px;font-size:11px;opacity:.75">',
-      'Prototype expérimental : le scan complet sera ajouté après validation du mode SOLO.</div>',
+      'Pour renommer, utilise JKL Backup (pas le téléchargement natif Telegram/Firefox).',
+      ' Photos sans nom original : photo_ID.jpg. Version expérimentale.</div>',
       '</section>'
     ].join('');
     document.body.appendChild(root);
@@ -453,8 +489,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.1.2';
-    console.info(PREFIX, 'Panneau v0.1.2 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.1.3';
+    console.info(PREFIX, 'Panneau v0.1.3 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -475,7 +511,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.1.2 pret (WebK).`);
+    console.info(`${PREFIX} v0.1.3 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });

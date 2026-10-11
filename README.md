@@ -1,6 +1,6 @@
 # JKL Telegram Backup
 
-**Statut : prototype expérimental v0.1.2 — téléchargement non validé sur Telegram Web.**
+**Statut : prototype expérimental v0.1.3 — téléchargement non validé sur Telegram Web.**
 
 Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos Telegram. L'objectif est de retrouver une expérience comparable à JKL Instagram Backup, adaptée à Telegram. Le prototype actuel vise **Telegram WebK uniquement**.
 
@@ -8,7 +8,7 @@ Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos
 
 ## Installer le prototype
 
-[**Installer JKL Telegram Backup v0.1.2 (Tampermonkey)**](https://raw.githubusercontent.com/JKL93sang/JKL-Telegram-backup/main/JKL_Telegram_Backup.user.js)
+[**Installer JKL Telegram Backup v0.1.3 (Tampermonkey)**](https://raw.githubusercontent.com/JKL93sang/JKL-Telegram-backup/main/JKL_Telegram_Backup.user.js)
 
 1. Activer Tampermonkey sur Firefox.
 2. Désactiver temporairement le téléchargeur Telegram tiers pour éviter les interactions entre scripts (sans le supprimer).
@@ -16,9 +16,9 @@ Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos
 4. Ouvrir [Telegram WebK](https://web.telegram.org/k/) et tester avec **une photo et une vidéo non sensibles**, puis une petite sélection.
 5. Noter précisément si le bouton apparaît, l'erreur affichée et si le fichier est réellement sauvegardé.
 
-## Interface et diagnostic v0.1.2
+## Interface et diagnostic v0.1.3
 
-Le petit bouton **« ↓ JKL Telegram Backup v0.1.2 »** est visible en haut, près du centre de la page Telegram. Il ouvre un panneau affichant :
+Le petit bouton **« ↓ JKL Telegram Backup v0.1.3 »** est visible en haut, près du centre de la page Telegram. Il ouvre un panneau affichant :
 - si Telegram WebK (`/k/`) est utilisé ;
 - si le moteur interne Telegram et la lecture des messages sont accessibles ;
 - les actions expérimentales **Télécharger le média survolé** et **Télécharger la sélection** ;
@@ -28,7 +28,7 @@ Si Telegram est ouvert sur `/a/`, le panneau propose un lien vers WebK ; les fon
 
 **Important :** l'interface visible est vérifiée par tests automatisés. Le téléchargement réel et la détection des messages restent non validés sur le navigateur de l'utilisateur.
 
-## Correctifs v0.1.2
+## Correctifs v0.1.3
 
 - **« Média ciblé » s'actualise pendant le survol**, sans refermer le panneau.
 - Dans un album, le script cherche l'identifiant du média survolé (si le DOM Telegram l'expose).
@@ -38,12 +38,26 @@ Si Telegram est ouvert sur `/a/`, le panneau propose un lien vers WebK ; les fon
 
 Les fonctions internes de téléchargement restent expérimentales, y compris le ciblage réel d'un album : cette version n'est pas encore une sauvegarde intégrale validée.
 
+## Renommage v0.1.3
+
+L'action **« JKL Backup · Télécharger + renommer »** dans le menu contextuel Telegram, ou le bouton de téléchargement SOLO du panneau JKL, déclenche le téléchargement renommé via le moteur de Telegram WebK.
+
+Exemples :
+- `Canal Démo - 2026-10-12_00-34-21 - reunion originale.mp4`
+- `Canal Démo - 2026-10-12_00-34-21 - photo_1234.jpg`
+
+Le nom original est extrait des métadonnées `documentAttributeFilename` / `file_name` quand Telegram le fournit (vidéos et documents vidéo). Les photos normales de Telegram n'exposent généralement pas leur nom original : `photo_<ID>.jpg` sert de remplacement stable. Pour une vidéo sans nom source : `video_<ID>.<ext>`. Les caractères interdits sur Windows sont neutralisés. La date correspond au message Telegram et la convention horaire est celle du navigateur.
+
+**Important :** cliquer sur **« Télécharger »** natif de Telegram ou **« Enregistrer l'image sous… »** dans Firefox ne déclenche pas notre traitement : le script ne modifie pas ces téléchargements. Ne pas attribuer au script JKL le nom d'un fichier issu d'une action native.
+
+Le menu contextuel JKL est expérimental : un test réel dans Firefox est toujours nécessaire pour valider l'intégration et le nom effectivement enregistré.
+
 ## Objectifs
 
 - Téléchargement **SOLO** : bouton près de chaque média et depuis la visionneuse.
 - Téléchargement **COMPLET** : scan de l'historique accessible d'un canal, groupe ou conversation.
 - Albums et sélections, photos et vidéos en qualité originale lorsqu'elle est disponible.
-- Renommage : `Conversation_Peer_Date_Type_MessageID.ext`.
+- Renommage : `NomDuCompte - AAAA-MM-JJ_HH-mm-ss - NomOriginal.ext` (nom de la conversation/canal visible).
 - Files d'attente, progression, reprise, anti-doublons et diagnostic des erreurs.
 - Interface discrète, stable et adaptée à Telegram Web.
 - Déploiement via GitHub avec contrôle automatique des nouvelles versions.
