@@ -13,7 +13,10 @@ source = source.slice(0, index) + '\nwindow.__testing = {sanitize, dateStamp, ge
 
 const requests = [];
 const browser = {
-  appDownloadManager: { downloadToDisc: async options => { requests.push(options); } }
+  appDownloadManager: { downloadMedia: async options => {
+    requests.push(options);
+    return {size: 600, slice() {return this;}};
+  } }
 };
 const sandbox = {
   window: browser,
@@ -25,7 +28,7 @@ const sandbox = {
   },
   MutationObserver: class { observe() {} },
   console,
-  setTimeout,
+  setTimeout: (fn, ms) => ms > 10000 ? 0 : setTimeout(fn, ms),
   clearTimeout,
   Element: class {},
   Date,
@@ -33,6 +36,14 @@ const sandbox = {
 };
 vm.runInNewContext(source, sandbox, { filename: filepath });
 const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage } = browser.__testing;
+const savedNames = [];
+const createdUrls = [];
+sandbox.URL = {createObjectURL(blob) { createdUrls.push(blob); return 'blob:demo/' + createdUrls.length; }, revokeObjectURL() {}};
+sandbox.document.createElement = tag => {
+  assert.equal(tag,'a');
+  return {style: {}, click() { savedNames.push({name:this.download, href:this.href}); }, remove() {}};
+};
+sandbox.document.body.appendChild = () => {};
 
 (async () => {
   assert.equal(sanitize(' A/B:*?\\C '), 'A_B_C');
@@ -41,8 +52,8 @@ const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage } = browser.__t
   const date = new Date(2026, 9, 12, 10, 21, 4).getTime() / 1000;
   assert.equal(dateStamp(date), '2026-10-12_10-21-04');
 
-  const photo = { _: 'photo', sizes: [] };
-  const video = { _: 'document', mime_type: 'video/mp4', attributes: [{ _: 'documentAttributeFilename', file_name: 'x.mp4' }] };
+  const photo = { _: 'photo', sizes: [{_: 'photoSize',type:'x',size:600}] };
+  const video = { _: 'document', size: 600, mime_type: 'video/mp4', attributes: [{ _: 'documentAttributeFilename', file_name: 'x.mp4' }] };
   const webm = { _: 'document', mime_type: 'video/webm', attributes: [] };
   const pdf = { _: 'document', mime_type: 'application/pdf' };
   const msgPhoto = { mid: 25, date, media: { photo }, peerId: '-100123' };
@@ -60,8 +71,13 @@ const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage } = browser.__t
   assert.equal(requests.length, 2);
   assert.equal(requests[0].media, photo);
   assert.equal(requests[1].media, video);
-  assert.equal(requests[0].fileName, 'Telegram - 2026-10-12_10-21-04 - photo_25.jpg');
-  assert.equal(requests[1].fileName, 'Telegram - 2026-10-12_10-21-04 - x.mp4');
+  assert.equal(requests[0].thumb.type, 'x');
+  assert.equal(requests[0].fileName, undefined, 'media API does not accept an output filename');
+  assert.equal(savedNames[0].name, 'Telegram - 2026-10-12_10-21-04 - photo_25.jpg');
+  assert.equal(savedNames[1].name, 'Telegram - 2026-10-12_10-21-04 - x.mp4');
+  assert.equal(savedNames[0].href, 'blob:demo/1');
+  assert.equal(savedNames[1].href, 'blob:demo/2');
+  assert.equal(savedNames.length, 2);
   assert.equal((await saveMessage({mid:1,media:{document:pdf}})).skipped, true);
   assert.equal(requests.length, 2);
 
@@ -89,7 +105,20 @@ const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage } = browser.__t
   }};
   assert.equal(fileName(deceptive, getMediaInfo(deceptive)),
     'Canal Démo _ Test - 2026-10-12_10-21-04 - video.mp4');
-  console.log('OK: noms chat/date/original, repli photo/video, extensions et moteur natif.');
+  const huge = {mid: 99, date, media: {document: {
+    _: 'document', mime_type:'video/mp4', size: 700 * 1024 * 1024,
+    file_name:'trop-grand.mp4', attributes:[]
+  }}};
+  await assert.rejects(() => saveMessage(huge), /512 Mio/);
+  assert.equal(requests.length, 2, 'oversized files must be blocked before memory allocation');
+  assert.equal(savedNames.length, 2);
+  const badSize = {mid: 44, date, media: {document: {
+    _: 'document', mime_type:'video/mp4', size: 999,
+    file_name:'incomplet.mp4', attributes:[]
+  }}};
+  await assert.rejects(() => saveMessage(badSize), /Taille vidéo incohérente/);
+  assert.equal(savedNames.length, 2, 'truncated downloads must never be offered to Firefox');
+  console.log('OK: téléchargement blob renommé réel (anchor.download), taille, extension, garde-fou mémoire.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
 
@@ -142,7 +171,7 @@ vm.runInNewContext(source, {
 }, {filename: filepath});
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.3');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.4');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -174,7 +203,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.3');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.4');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
