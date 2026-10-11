@@ -65,3 +65,60 @@ const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage } = browser.__t
   assert.equal(requests.length, 2);
   console.log('OK: 16 controles (noms, dates, filtres media, moteur natif et extensions).');
 })().catch(error => { console.error(error); process.exitCode = 1; });
+
+
+// Verify a visible entry point is mounted even when Telegram internals are absent.
+const widgets = new Map();
+let appended = null;
+class FakeElement {
+  constructor() {
+    this.style = {};
+    this.dataset = {};
+    this.hidden = true;
+    this.textContent = '';
+    this.listeners = {};
+  }
+  setAttribute(key, value) { this[key] = value; }
+  addEventListener(key, cb) { this.listeners[key] = cb; }
+  querySelector(selector) {
+    if (!widgets.has(selector)) widgets.set(selector, new FakeElement());
+    return widgets.get(selector);
+  }
+  set innerHTML(html) { this.html = html; }
+}
+const fakeDocument = {
+  body: {appendChild(el) { appended = el; }},
+  documentElement: {dataset: {}},
+  createElement() { return new FakeElement(); },
+  getElementById(id) { return appended?.id === id ? appended : null; },
+  addEventListener() {},
+  querySelector() { return null; },
+  querySelectorAll() { return []; }
+};
+const fakeLocation = {hostname: 'web.telegram.org', pathname: '/a/', hash: '#abc', href: 'https://web.telegram.org/a/#abc'};
+vm.runInNewContext(source, {
+  window: {},
+  document: fakeDocument,
+  location: fakeLocation,
+  navigator: {clipboard: {writeText: async () => {}}},
+  MutationObserver: class {observe() {}},
+  Element: class {},
+  console,
+  setTimeout,
+  clearTimeout,
+  Promise,
+  Date
+}, {filename: filepath});
+assert.equal(appended?.id, 'jkl-tg-dock');
+assert.match(appended.html, /Télécharger le média survolé/);
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.1');
+const toggle = widgets.get('#jkl-tg-toggle');
+toggle.listeners.click();
+assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
+assert.equal(widgets.get('#jkl-tg-webk').style.display, 'block');
+fakeLocation.pathname = '/k/';
+toggle.listeners.click();
+toggle.listeners.click();
+assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : OK/);
+assert.equal(widgets.get('#jkl-tg-webk').style.display, 'none');
+console.log('OK: le panneau visible et le diagnostic WebA/WebK sont montés et interactifs.');
