@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.1.1
+// @version      0.1.2
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -16,7 +16,7 @@
 // ==/UserScript==
 
 /*
- * v0.1.1 - prototype WebK, sans dependances ni serveur tiers.
+ * v0.1.2 - prototype WebK, sans dependances ni serveur tiers.
  * Exploite downloadToDisc({ media, fileName }) de Telegram WebK.
  * Les messages doivent etre accessibles dans la session Telegram ouverte.
  * Limites: pas de scan historique, pas de controle des doublons, pas d'album
@@ -248,25 +248,35 @@
   // Always-visible launcher: the previous version had no discoverable entrypoint
   // until a particular right-click menu or selection UI was opened.
   let lastHoveredRef = null;
+  let refreshDock = null;
 
   function isWebK() {
     return location.hostname === 'webk.telegram.org' ||
       (location.hostname === 'web.telegram.org' && location.pathname.startsWith('/k'));
   }
 
+  // Album items have their own data-mid. Resolve the nearest media's ID.
   function readRef(element) {
-    const bubble = element instanceof Element ? element.closest('[data-mid]') : null;
-    if (!bubble) return null;
-    const peerId = bubble.dataset.peerId ||
-      bubble.closest('[data-peer-id]')?.dataset.peerId ||
+    if (!(element instanceof Element)) return null;
+    const media = element.closest(
+      '.album-item, .media-photo, .media-video, .media-container, ' +
+      '.media-container-aspecter, .video-container'
+    );
+    const item = media?.closest('[data-mid]');
+    if (!item) return null;
+    const peerId = item.dataset.peerId ||
+      item.closest('[data-peer-id]')?.dataset.peerId ||
       page.appImManager?.chat?.peerId;
-    const mid = bubble.dataset.mid;
-    return peerId != null && mid != null ? {peerId, mid} : null;
+    const mid = item.dataset.mid;
+    return peerId != null && mid != null && mid !== '' ? {peerId, mid} : null;
   }
 
   document.addEventListener('mouseover', event => {
     const ref = readRef(event.target);
-    if (ref) lastHoveredRef = ref;
+    if (ref && (ref.mid !== lastHoveredRef?.mid || String(ref.peerId) !== String(lastHoveredRef?.peerId))) {
+      lastHoveredRef = ref;
+      refreshDock?.();
+    }
   }, true);
 
   function getSoloRef() {
@@ -282,7 +292,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.1.1',
+      'JKL Telegram Backup v0.1.2',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur natif : ' + yes(typeof page.appDownloadManager?.downloadToDisc === 'function'),
@@ -290,6 +300,64 @@
       'Sélection : ' + yes(typeof page.appImManager?.chat?.selection?.getSelectedMessages === 'function'),
       'Dernier message survolé : ' + (lastHoveredRef ? lastHoveredRef.mid : 'aucun')
     ].join('\n');
+  }
+
+  function installDrag(root, handle, panel) {
+    const key = 'jkl-tg-backup-dock-position-v1';
+    const position = (x, y) => {
+      const rect = root.getBoundingClientRect();
+      const width = Math.max(rect.width, panel.hidden ? 0 : (panel.offsetWidth || 316));
+      const height = panel.hidden ? rect.height : 42 + (panel.offsetHeight || 250);
+      const clamp = (value, limit) => Math.max(8, Math.min(value, Math.max(8, limit - 8)));
+      root.style.left = clamp(x, window.innerWidth - width) + 'px';
+      root.style.top = clamp(y, window.innerHeight - height) + 'px';
+      root.style.transform = 'none';
+    };
+    const save = () => {
+      try {
+        localStorage.setItem(key, JSON.stringify({
+          x: parseFloat(root.style.left), y: parseFloat(root.style.top)
+        }));
+      } catch (err) { console.warn(PREFIX, 'Position non enregistrée', err); }
+    };
+    try {
+      const p = JSON.parse(localStorage.getItem(key) || 'null');
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) position(p.x, p.y);
+    } catch (err) { console.warn(PREFIX, 'Position non restaurée', err); }
+    let drag = null;
+    handle.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      delete handle.dataset.jklDragClick;
+      const rect = root.getBoundingClientRect();
+      drag = { id:e.pointerId, x:e.clientX, y:e.clientY,
+        left:rect.left, top:rect.top, moved:false };
+      handle.setPointerCapture?.(e.pointerId);
+    });
+    handle.addEventListener('pointermove', e => {
+      if (!drag || drag.id !== e.pointerId) return;
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 6) return;
+      drag.moved = true;
+      e.preventDefault();
+      position(drag.left + dx, drag.top + dy);
+    });
+    const finish = e => {
+      if (!drag || drag.id !== e.pointerId) return;
+      if (drag.moved) {
+        handle.dataset.jklDragClick = '1';
+        save();
+      }
+      drag = null;
+      if (handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+    };
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+    window.addEventListener?.('resize', () => {
+      if (root.style.transform === 'none') {
+        position(parseFloat(root.style.left), parseFloat(root.style.top));
+        save();
+      }
+    });
   }
 
   function mountDock() {
@@ -306,11 +374,11 @@
     ].join(';');
     root.innerHTML = [
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
-      ' style="cursor:pointer;border:1px solid #6faec9;background:#183d54;',
+      ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.1</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.2</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
-      'left:50%;top:42px;transform:translateX(-50%);width:316px;',
+      'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
       'background:#142b39;border:1px solid #557083;line-height:1.45">',
       '<strong>JKL Telegram Backup</strong>',
@@ -349,7 +417,13 @@
       webk.style.display = k ? 'none' : 'block';
       webk.href = 'https://web.telegram.org/k/' + location.hash;
     };
+    refreshDock = refresh;
+    installDrag(root, toggle, panel);
     toggle.addEventListener('click', () => {
+      if (toggle.dataset.jklDragClick === '1') {
+        delete toggle.dataset.jklDragClick;
+        return;
+      }
       panel.hidden = !panel.hidden;
       panel.style.display = panel.hidden ? 'none' : 'block';
       toggle.setAttribute('aria-expanded', String(!panel.hidden));
@@ -379,8 +453,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.1.1';
-    console.info(PREFIX, 'Panneau v0.1.1 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.1.2';
+    console.info(PREFIX, 'Panneau v0.1.2 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -401,7 +475,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.1.1 pret (WebK).`);
+    console.info(`${PREFIX} v0.1.2 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
