@@ -8,7 +8,7 @@ let code = fs.readFileSync(__dirname + '/../JKL_Telegram_Backup.user.js', 'utf8'
 assert.ok(code.trimEnd().endsWith('})();'));
 const p = code.lastIndexOf('\n})();');
 code = code.slice(0, p) +
-  '\nwindow.__bulkTests = {backupAll, stopBackup, fetchMediaPage, mediaIdentity, getMediaInfo, getResult:()=>lastBulkResult};' +
+  '\nwindow.__bulkTests = {backupAll, stopBackup, fetchMediaPage, mediaIdentity, getMediaInfo, getResult:()=>lastBulkResult, reportForOpenChat};' +
   code.slice(p);
 
 const events = [];
@@ -88,7 +88,7 @@ const sandbox = {
   clearTimeout
 };
 vm.runInNewContext(code,sandbox,{filename:'JKL_Telegram_Backup.user.js'});
-const {backupAll,getResult,mediaIdentity,getMediaInfo}=window.__bulkTests;
+const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat}=window.__bulkTests;
 (async()=>{
   assert.equal(getMediaInfo(docImage).type,'PHOTO');
   assert.equal(mediaIdentity(video,getMediaInfo(video),{peerId:'-10042'}),'-10042:20:v20');
@@ -116,6 +116,33 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo}=window.__bulkTests;
   assert.equal(second.skipped,3);
   assert.equal(second.done,0);
   assert.equal(completed.length,3,'rerun must not redownload stored successes');
+  // A single failed download must be visible in the report with MID, type,
+  // media size and exact reason. Only successful items enter the ledger.
+  const normalDownload=sandbox.GM_download;
+  storage.clear();
+  sandbox.GM_download=args=>{
+    if (args.name.includes('video-source.mp4')) args.onerror({error:'save_failed_test'});
+    else normalDownload(args);
+  };
+  await backupAll();
+  const withErrors=getResult();
+  assert.equal(withErrors.errors,1);
+  assert.equal(withErrors.complete,false);
+  assert.equal(withErrors.failures.length,1);
+  assert.equal(withErrors.failures[0].mid,'20');
+  assert.equal(withErrors.failures[0].type,'VIDEO');
+  assert.match(withErrors.failures[0].size,/Mio$/);
+  assert.match(withErrors.failures[0].reason,/save_failed_test/);
+  const persistedReport=storage.get('JKL_TG_REPORT_V1:-10042:0');
+  assert.match(persistedReport,/save_failed_test/);
+  assert.match(reportForOpenChat(),/#20.*VIDEO.*save_failed_test/);
+  assert.equal(JSON.parse(storage.get('JKL_TG_OK_V1:-10042:0')).length,2);
+  sandbox.GM_download=normalDownload;
+  await backupAll();
+  assert.equal(getResult().done,1);
+  assert.equal(getResult().skipped,2);
+  assert.equal(getResult().errors,0);
+  assert.equal(getResult().complete,true);
   // Refuse to mark a scan complete if the cursor never progresses.
   const original=manager.getHistory;
   manager.getHistory=async()=>({
