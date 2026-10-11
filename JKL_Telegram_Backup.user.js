@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.1.0
+// @version      0.1.1
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
-// @match        https://web.telegram.org/k/*
+// @match        https://web.telegram.org/*
+// @match        https://webz.telegram.org/*
 // @match        https://webk.telegram.org/*
 // @grant        none
 // @run-at       document-idle
@@ -15,7 +16,7 @@
 // ==/UserScript==
 
 /*
- * v0.1.0 - prototype WebK, sans dependances ni serveur tiers.
+ * v0.1.1 - prototype WebK, sans dependances ni serveur tiers.
  * Exploite downloadToDisc({ media, fileName }) de Telegram WebK.
  * Les messages doivent etre accessibles dans la session Telegram ouverte.
  * Limites: pas de scan historique, pas de controle des doublons, pas d'album
@@ -243,6 +244,145 @@
     pending = peerId != null && mid != null ? { peerId, mid } : null;
   }
 
+
+  // Always-visible launcher: the previous version had no discoverable entrypoint
+  // until a particular right-click menu or selection UI was opened.
+  let lastHoveredRef = null;
+
+  function isWebK() {
+    return location.hostname === 'webk.telegram.org' ||
+      (location.hostname === 'web.telegram.org' && location.pathname.startsWith('/k'));
+  }
+
+  function readRef(element) {
+    const bubble = element instanceof Element ? element.closest('[data-mid]') : null;
+    if (!bubble) return null;
+    const peerId = bubble.dataset.peerId ||
+      bubble.closest('[data-peer-id]')?.dataset.peerId ||
+      page.appImManager?.chat?.peerId;
+    const mid = bubble.dataset.mid;
+    return peerId != null && mid != null ? {peerId, mid} : null;
+  }
+
+  document.addEventListener('mouseover', event => {
+    const ref = readRef(event.target);
+    if (ref) lastHoveredRef = ref;
+  }, true);
+
+  function getSoloRef() {
+    const viewerOpen = !!document.querySelector('.media-viewer-whole.active');
+    if (viewerOpen) {
+      const t = page.appMediaViewer?.target;
+      if (t && t.peerId != null && t.mid != null) return {peerId: t.peerId, mid: t.mid};
+      throw new Error('Visionneuse ouverte : identifiant du média inaccessible. Ferme-la et survole le message.');
+    }
+    return lastHoveredRef;
+  }
+
+  function diagnostics() {
+    const yes = x => x ? 'OK' : 'INDISPONIBLE';
+    return [
+      'JKL Telegram Backup v0.1.1',
+      'URL : ' + location.href,
+      'WebK : ' + yes(isWebK()),
+      'Moteur natif : ' + yes(typeof page.appDownloadManager?.downloadToDisc === 'function'),
+      'Lecture messages : ' + yes(typeof page.mtprotoMessagePort?.getMessageByPeer === 'function'),
+      'Sélection : ' + yes(typeof page.appImManager?.chat?.selection?.getSelectedMessages === 'function'),
+      'Dernier message survolé : ' + (lastHoveredRef ? lastHoveredRef.mid : 'aucun')
+    ].join('\n');
+  }
+
+  function mountDock() {
+    if (typeof document.createElement !== 'function' || !document.body?.appendChild) return;
+    if (document.getElementById('jkl-tg-dock')) return;
+    const root = document.createElement('section');
+    root.id = 'jkl-tg-dock';
+    root.setAttribute('aria-label', 'JKL Telegram Backup');
+    root.style.cssText = [
+      'position:fixed', 'top:76px', 'left:50%', 'transform:translateX(-50%)',
+      'z-index:2147483643', 'font:13px system-ui,sans-serif',
+      'color:#eaf4ff', 'max-width:calc(100vw - 24px)',
+      'filter:drop-shadow(0 4px 13px #0006)'
+    ].join(';');
+    root.innerHTML = [
+      '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
+      ' style="cursor:pointer;border:1px solid #6faec9;background:#183d54;',
+      'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.1</small></button>',
+      '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
+      'left:50%;top:42px;transform:translateX(-50%);width:316px;',
+      'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
+      'background:#142b39;border:1px solid #557083;line-height:1.45">',
+      '<strong>JKL Telegram Backup</strong>',
+      '<div id="jkl-tg-status" style="white-space:pre-line;margin:8px 0 11px;',
+      'font-size:12px;color:#b6d4df"></div>',
+      '<button id="jkl-tg-solo" type="button" style="cursor:pointer;padding:8px;',
+      'border:0;border-radius:7px;background:#34718b;color:white;margin:0 5px 6px 0">',
+      'Télécharger le média survolé</button>',
+      '<button id="jkl-tg-selected" type="button" style="cursor:pointer;padding:8px;',
+      'border:0;border-radius:7px;background:#34718b;color:white;margin-bottom:6px">',
+      'Télécharger la sélection</button>',
+      '<button id="jkl-tg-diag" type="button" style="cursor:pointer;padding:7px;',
+      'border:1px solid #50758b;border-radius:7px;background:transparent;color:#eaf4ff">',
+      'Copier diagnostic</button>',
+      '<a id="jkl-tg-webk" href="https://web.telegram.org/k/"',
+      ' style="display:none;margin-top:8px;color:#97dcff">',
+      'Ouvrir Telegram WebK</a>',
+      '<div style="margin-top:9px;font-size:11px;opacity:.75">',
+      'Prototype expérimental : le scan complet sera ajouté après validation du mode SOLO.</div>',
+      '</section>'
+    ].join('');
+    document.body.appendChild(root);
+    const toggle = root.querySelector('#jkl-tg-toggle');
+    const panel = root.querySelector('#jkl-tg-panel');
+    const status = root.querySelector('#jkl-tg-status');
+    const webk = root.querySelector('#jkl-tg-webk');
+
+    const refresh = () => {
+      const k = isWebK();
+      const downloader = typeof page.appDownloadManager?.downloadToDisc === 'function';
+      const lookup = typeof page.mtprotoMessagePort?.getMessageByPeer === 'function';
+      status.textContent = (k ? 'WebK : OK' : 'WebK : NON (version non prise en charge)') +
+        '\nMoteur téléchargement : ' + (downloader ? 'OK' : 'indisponible') +
+        '\nAccès aux messages : ' + (lookup ? 'OK' : 'indisponible') +
+        '\nMédia ciblé : ' + (lastHoveredRef ? '#' + lastHoveredRef.mid : 'aucun (survole une photo/vidéo)');
+      webk.style.display = k ? 'none' : 'block';
+      webk.href = 'https://web.telegram.org/k/' + location.hash;
+    };
+    toggle.addEventListener('click', () => {
+      panel.hidden = !panel.hidden;
+      panel.style.display = panel.hidden ? 'none' : 'block';
+      toggle.setAttribute('aria-expanded', String(!panel.hidden));
+      refresh();
+    });
+    panel.style.display = 'none';
+    root.querySelector('#jkl-tg-solo').addEventListener('click', async () => {
+      if (!isWebK()) return toast('Ouvre Telegram WebK pour utiliser ce mode.', true);
+      let ref;
+      try { ref = getSoloRef(); } catch (err) { return toast(err.message, true); }
+      if (!ref) return toast('Survole une photo/vidéo dans le chat avant de cliquer.', true);
+      await saveSingle(ref);
+      refresh();
+    });
+    root.querySelector('#jkl-tg-selected').addEventListener('click', async event => {
+      if (!isWebK()) return toast('Ouvre Telegram WebK pour utiliser ce mode.', true);
+      await saveSelection(event.currentTarget);
+      refresh();
+    });
+    root.querySelector('#jkl-tg-diag').addEventListener('click', async () => {
+      const report = diagnostics();
+      try {
+        await navigator.clipboard.writeText(report);
+        toast('Diagnostic copié.');
+      } catch {
+        console.info(PREFIX, report);
+        toast('Diagnostic affiché dans la console (F12).', true);
+      }
+    });
+    document.documentElement.dataset.jklTelegramBackup = '0.1.1';
+    console.info(PREFIX, 'Panneau v0.1.1 initialisé. '+ diagnostics());
+  }
+
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
   document.addEventListener('mouseup', e => { if (e.button === 2) captureTarget(e.target); }, true);
 
@@ -258,9 +398,10 @@
     for (const record of records) for (const node of record.addedNodes) process(node);
   });
   const start = () => {
+    mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.1.0 pret (WebK).`);
+    console.info(`${PREFIX} v0.1.1 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
