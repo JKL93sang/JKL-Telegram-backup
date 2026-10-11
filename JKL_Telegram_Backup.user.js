@@ -19,14 +19,13 @@
 // ==/UserScript==
 
 /*
- * v0.2.0 - prototype WebK, sans dependances ni serveur tiers.
- * Exploite downloadToDisc({ media, fileName }) de Telegram WebK.
- * Les messages doivent etre accessibles dans la session Telegram ouverte.
- * Limites: pas de scan historique, pas de controle des doublons, pas d'album
- * automatique hors messages selectionnes, pas de choix d'arborescence disque.
- * ATTENTION : les fonctions internes WebK utilisees par ce prototype ne sont
- * pas garanties exposees globalement (window); fonctionnement non valide.
- * Conserver le script de secours jusqu'aux tests en situation reelle.
+ * v0.2.0 - WebK only, no external services.
+ * SOLO / selection: fetch original media Blob, GM_download into profile folder.
+ * ALL: paginate the accessible history with Telegram's getHistory media filters.
+ * Sequential queue, explicit stop, progress, persistent success ledger/resume.
+ * No claim of completeness without history-end proof on every filter.
+ * 512 MiB per-file memory guard. WebK internals can change at any time.
+ * Full-channel runs must be validated in Firefox before relying on the archive.
  */
 (() => {
   'use strict';
@@ -445,11 +444,12 @@
         }
       }
     }
-    const last = messages.length ? messages[messages.length - 1] : null;
     const rawLast = result.history.length ? result.history[result.history.length - 1] : null;
-    const next = last
-      ? {peerId: last.peerId ?? ctx.peerId, mid: last.mid}
-      : rawLast != null ? {peerId: ctx.peerId, mid: rawLast} : null;
+    // Use the backend page cursor, not a potentially re-ordered hydrated array.
+    const matched = rawLast == null ? null :
+      messages.find(message => String(message.mid) === String(rawLast));
+    const next = rawLast == null ? null :
+      {peerId: matched?.peerId ?? ctx.peerId, mid: rawLast};
     return { messages, next, rawCount: result.history.length,
       isTopEnd: result.isEnd?.top === true,
       expected: Number.isFinite(result.count) ? result.count : null };
@@ -515,8 +515,10 @@
           if (pageData.expected != null) {
             job.detail = 'Messages correspondant au filtre : ' + pageData.expected;
           }
-          if (pageData.rawCount && !pageData.messages.length) {
-            throw new Error('Messages non hydratés par WebK ; scan incomplet.');
+          if (pageData.rawCount !== pageData.messages.length) {
+            throw new Error('Page Telegram partiellement hydratée (' +
+              pageData.messages.length + '/' + pageData.rawCount +
+              ') ; scan incomplet. Aucun succès global annoncé.');
           }
 
           for (const msg of pageData.messages) {
