@@ -53,17 +53,43 @@ const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage } = browser.__t
   assert.equal(getMediaInfo({media:{document:pdf}}), null);
   assert.equal(getMediaInfo({media:{}}), null);
 
-  assert.equal(fileName(msgPhoto, getMediaInfo(msgPhoto)), 'Telegram_-100123_2026-10-12_10-21-04_PHOTO_25.jpg');
-  assert.equal(fileName(msgVideo, getMediaInfo(msgVideo)), 'Telegram_-100123_2026-10-12_10-21-04_VIDEO_26.mp4');
+  assert.equal(fileName(msgPhoto, getMediaInfo(msgPhoto)), 'Telegram - 2026-10-12_10-21-04 - photo_25.jpg');
+  assert.equal(fileName(msgVideo, getMediaInfo(msgVideo)), 'Telegram - 2026-10-12_10-21-04 - x.mp4');
   await saveMessage(msgPhoto);
   await saveMessage(msgVideo);
   assert.equal(requests.length, 2);
   assert.equal(requests[0].media, photo);
   assert.equal(requests[1].media, video);
-  assert.match(requests[1].fileName, /_VIDEO_26\.mp4$/);
+  assert.equal(requests[0].fileName, 'Telegram - 2026-10-12_10-21-04 - photo_25.jpg');
+  assert.equal(requests[1].fileName, 'Telegram - 2026-10-12_10-21-04 - x.mp4');
   assert.equal((await saveMessage({mid:1,media:{document:pdf}})).skipped, true);
   assert.equal(requests.length, 2);
-  console.log('OK: 16 controles (noms, dates, filtres media, moteur natif et extensions).');
+
+  // Original document names must be respected, sanitized and safely suffixed.
+  sandbox.document.querySelector = selector =>
+    selector === '#column-center .chat-info .peer-title'
+      ? { textContent: 'Canal Démo / Test' } : null;
+  assert.equal(fileName(msgVideo, getMediaInfo(msgVideo)),
+    'Canal Démo _ Test - 2026-10-12_10-21-04 - x.mp4');
+  const pathVideo = {mid: 28, date, media: {
+    document: {
+      _: 'document', mime_type: 'video/mp4',
+      attributes: [{_: 'documentAttributeFilename', file_name: 'C:\\\\Users\\\\Bob\\\\réunion originale.MP4'}]
+    }
+  }};
+  assert.equal(fileName(pathVideo, getMediaInfo(pathVideo)),
+    'Canal Démo _ Test - 2026-10-12_10-21-04 - réunion originale.mp4');
+  const noOrig = {mid: 29, date, media: {
+    document: {_: 'document', mime_type:'video/webm', attributes:[]}
+  }};
+  assert.equal(fileName(noOrig, getMediaInfo(noOrig)),
+    'Canal Démo _ Test - 2026-10-12_10-21-04 - video_29.webm');
+  const deceptive = {mid: 31, date, media: {
+    document: {_: 'document', mime_type:'video/mp4', file_name:'video.exe', attributes:[]}
+  }};
+  assert.equal(fileName(deceptive, getMediaInfo(deceptive)),
+    'Canal Démo _ Test - 2026-10-12_10-21-04 - video.mp4');
+  console.log('OK: noms chat/date/original, repli photo/video, extensions et moteur natif.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
 
@@ -116,7 +142,7 @@ vm.runInNewContext(source, {
 }, {filename: filepath});
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.2');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.3');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -148,7 +174,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.2');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.3');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
