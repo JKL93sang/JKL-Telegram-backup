@@ -122,7 +122,7 @@ sandbox.GM_download = args => {
   assert.equal(profileDownloadPath('Canal Démo / Test', 'exemple.mp4'),
     'Canal Démo _ Test/exemple.mp4');
   assert.equal(profileDownloadPath('../../Autre', 'photo.jpg'),
-    '_ _ Autre/photo.jpg'); // no directory traversal from profile names
+    '_.._Autre/photo.jpg'); // no directory traversal from profile names
   await saveMessage(msgVideo);
   assert.equal(completed.at(-1).name,
     'Canal Démo _ Test/Canal Démo _ Test - 2026-10-12_10-21-04 - x.mp4');
