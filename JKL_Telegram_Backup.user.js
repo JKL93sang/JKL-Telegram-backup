@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.2.1
+// @version      0.2.2
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -19,7 +19,7 @@
 // ==/UserScript==
 
 /*
- * v0.2.1 - WebK only, no external services.
+ * v0.2.2 - WebK only, no external services.
  * SOLO / selection: fetch original media Blob, GM_download into profile folder.
  * ALL: paginate the accessible history with Telegram's getHistory media filters.
  * Sequential queue, explicit stop, progress, persistent success ledger/resume.
@@ -184,11 +184,28 @@
           saveAs: false,
           conflictAction: 'uniquify',
           onload: () => complete(),
-          onerror: event => complete(new Error(
-            'Téléchargement dans le dossier échoué (' +
-            String(event?.error || event?.details || 'inconnu') +
-            '). Vérifie les permissions et le mode Browser API de Tampermonkey.'
-          )),
+          onerror: event => {
+            const code = String(event?.error || 'inconnu');
+            if (code === 'not_whitelisted') {
+              // The browser download whitelist is a user permission. Never
+              // bypass it or silently fall back to an unclassified file.
+              const extension = String(path).split('/').pop()
+                ?.match(/[.]([a-z0-9]{2,8})$/i)?.[1]?.toLowerCase();
+              complete(new Error(
+                'Extension ' + (extension ? '.' + extension : 'du fichier') +
+                ' non autorisée (not_whitelisted). Tampermonkey → Paramètres → ' +
+                'Téléchargements → Whitelisted File Extensions : ajouter ' +
+                (extension || 'cette extension') +
+                ' aux extensions existantes. Garder le mode Browser API.'
+              ));
+              return;
+            }
+            complete(new Error(
+              'Téléchargement dans le dossier échoué (' +
+              String(event?.error || event?.details || 'inconnu') +
+              '). Vérifie les permissions et le mode Browser API de Tampermonkey.'
+            ));
+          },
           ontimeout: () => complete(new Error('Téléchargement Tampermonkey expiré.'))
         });
       } catch (error) {
@@ -764,7 +781,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.2.1',
+      'JKL Telegram Backup v0.2.2',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
@@ -852,7 +869,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.1</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.2</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);overflow-y:auto;',
@@ -980,8 +997,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.2.1';
-    console.info(PREFIX, 'Panneau v0.2.1 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.2.2';
+    console.info(PREFIX, 'Panneau v0.2.2 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -1002,7 +1019,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.2.1 pret (WebK).`);
+    console.info(`${PREFIX} v0.2.2 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
