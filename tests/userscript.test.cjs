@@ -77,6 +77,7 @@ class FakeElement {
     this.hidden = true;
     this.textContent = '';
     this.listeners = {};
+    this.dataset = {};
   }
   setAttribute(key, value) { this[key] = value; }
   addEventListener(key, cb) { this.listeners[key] = cb; }
@@ -85,24 +86,28 @@ class FakeElement {
     return widgets.get(selector);
   }
   set innerHTML(html) { this.html = html; }
+  getBoundingClientRect() { return {left: parseFloat(this.style.left) || 400, top: parseFloat(this.style.top) || 76, width:210, height:40}; }
 }
+const documentEvents = new Map();
+const storage = new Map();
 const fakeDocument = {
   body: {appendChild(el) { appended = el; }},
   documentElement: {dataset: {}},
   createElement() { return new FakeElement(); },
   getElementById(id) { return appended?.id === id ? appended : null; },
-  addEventListener() {},
+  addEventListener(event, cb) { documentEvents.set(event, cb); },
   querySelector() { return null; },
   querySelectorAll() { return []; }
 };
 const fakeLocation = {hostname: 'web.telegram.org', pathname: '/a/', hash: '#abc', href: 'https://web.telegram.org/a/#abc'};
 vm.runInNewContext(source, {
-  window: {},
+  window: {innerWidth:1440, innerHeight:900, addEventListener() {}},
   document: fakeDocument,
+  localStorage: {getItem(k){return storage.get(k)||null;},setItem(k,v){storage.set(k,v);}},
   location: fakeLocation,
   navigator: {clipboard: {writeText: async () => {}}},
   MutationObserver: class {observe() {}},
-  Element: class {},
+  Element: FakeElement,
   console,
   setTimeout,
   clearTimeout,
@@ -111,7 +116,7 @@ vm.runInNewContext(source, {
 }, {filename: filepath});
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.1');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.2');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -122,3 +127,40 @@ toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : OK/);
 assert.equal(widgets.get('#jkl-tg-webk').style.display, 'none');
 console.log('OK: le panneau visible et le diagnostic WebA/WebK sont montés et interactifs.');
+
+// Hover must update a visible status without toggling the panel.
+const hover = documentEvents.get('mouseover');
+assert.equal(typeof hover, 'function');
+const target = new FakeElement();
+let itemMid = '101';
+target.closest = selector => {
+  if (selector.startsWith('.album-item')) {
+    return {
+      closest() {
+        return { dataset: {mid:itemMid, peerId:'-10042'} };
+      }
+    };
+  }
+  return null;
+};
+hover({target});
+assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
+itemMid = '102';
+hover({target});
+assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.2');
+
+// Dragging the title moves the whole UI and saves the new location.
+const panel = widgets.get('#jkl-tg-panel');
+const wasHidden = panel.hidden;
+toggle.listeners.pointerdown({button:0,pointerId:11,clientX:420,clientY:90});
+toggle.listeners.pointermove({pointerId:11,clientX:470,clientY:140,preventDefault() {}});
+toggle.listeners.pointerup({pointerId:11});
+assert.match(appended.style.left, /px$/);
+assert.match(appended.style.top, /px$/);
+assert.equal(JSON.parse(storage.get('jkl-tg-backup-dock-position-v1')).x, parseFloat(appended.style.left));
+toggle.listeners.click();
+assert.equal(panel.hidden, wasHidden, 'drag must not toggle the panel');
+toggle.listeners.click();
+assert.notEqual(panel.hidden, wasHidden, 'normal click must still toggle the panel');
+console.log('OK: live hover (album inclus), glisser-déposer, persistance et distinction clic/glissement.');
