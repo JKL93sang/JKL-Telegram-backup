@@ -1,13 +1,16 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.1.4
+// @version      0.1.5
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
 // @match        https://webz.telegram.org/*
 // @match        https://webk.telegram.org/*
-// @grant        none
+// @sandbox      raw
+// @grant        unsafeWindow
+// @grant        GM_download
+// @grant        GM_info
 // @run-at       document-idle
 // @homepageURL  https://github.com/JKL93sang/JKL-Telegram-backup
 // @supportURL   https://github.com/JKL93sang/JKL-Telegram-backup/issues
@@ -16,7 +19,7 @@
 // ==/UserScript==
 
 /*
- * v0.1.4 - prototype WebK, sans dependances ni serveur tiers.
+ * v0.1.5 - prototype WebK, sans dependances ni serveur tiers.
  * Exploite downloadToDisc({ media, fileName }) de Telegram WebK.
  * Les messages doivent etre accessibles dans la session Telegram ouverte.
  * Limites: pas de scan historique, pas de controle des doublons, pas d'album
@@ -109,10 +112,10 @@
     return 'Telegram';
   }
 
-  function fileName(msg, mediaInfo) {
+  function fileName(msg, mediaInfo, profile = currentChatLabel()) {
     const mid = msg.mid ?? msg.id;
     if (mid === undefined || mid === null || mid === '') throw new Error('ID de message indisponible.');
-    const source = currentChatLabel();
+    const source = filePart(profile, 'Telegram', 70);
     const extension = mediaInfo.ext;
     let originalBase;
     if (mediaInfo.originalName) {
@@ -128,6 +131,56 @@
     }
     const result = `${source} - ${dateStamp(msg.date)} - ${originalBase}.${extension}`;
     return result;
+  }
+
+
+  // The browser's HTML <a download> treats slashes as filename characters.
+  // Tampermonkey Browser API accepts relative directories in GM_download.name.
+  function profileDownloadPath(profile, name) {
+    return filePart(profile, 'Telegram', 70) + '/' + String(name);
+  }
+
+  function gmDownloadMode() {
+    return typeof GM_info !== 'undefined' ? String(GM_info?.downloadMode || '') : '';
+  }
+
+  function downloadBlobIntoProfile(blob, path) {
+    if (typeof GM_download !== 'function') {
+      return Promise.reject(new Error('GM_download indisponible : impossible de créer le dossier.'));
+    }
+    const mode = gmDownloadMode().toLowerCase();
+    if (mode === 'native' || mode === 'disabled') {
+      return Promise.reject(new Error(
+        'Dossier indisponible : Tampermonkey → Paramètres → Téléchargements → Browser API.'
+      ));
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const complete = error => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error);
+        else resolve();
+      };
+      try {
+        GM_download({
+          url: blob,
+          name: path,
+          saveAs: false,
+          conflictAction: 'uniquify',
+          onload: () => complete(),
+          onerror: event => complete(new Error(
+            'Téléchargement dans le dossier échoué (' +
+            String(event?.error || event?.details || 'inconnu') +
+            '). Vérifie les permissions et le mode Browser API de Tampermonkey.'
+          )),
+          ontimeout: () => complete(new Error('Téléchargement Tampermonkey expiré.'))
+        });
+      } catch (error) {
+        complete(new Error('Tampermonkey a refusé la sauvegarde : ' +
+          (error?.message || String(error))));
+      }
+    });
   }
 
   function toast(text, isError = false) {
@@ -174,11 +227,16 @@
     if (typeof downloader !== 'function') {
       throw new Error('Moteur Blob Telegram WebK indisponible. Aucun fichier enregistré.');
     }
-    if (typeof URL.createObjectURL !== 'function') {
-      throw new Error('Sauvegarde renommée impossible : Blob URL indisponible.');
+    if (typeof GM_download !== 'function') {
+      throw new Error('GM_download indisponible : vérifie les permissions de Tampermonkey.');
     }
-
-    const name = fileName(msg, info, peerId);
+    const mode = gmDownloadMode().toLowerCase();
+    if (mode === 'native' || mode === 'disabled') {
+      throw new Error('Pour créer les dossiers : Tampermonkey → Téléchargements → Browser API.');
+    }
+    const profile = currentChatLabel();
+    const name = fileName(msg, info, profile);
+    const path = profileDownloadPath(profile, name);
     const photoSize = info.media._ === 'photo' ? largestPhotoSize(info.media) : null;
     if (info.media._ === 'photo' && !photoSize) {
       throw new Error('Taille de photo Telegram indisponible.');
@@ -208,18 +266,13 @@
         ' octets) : sauvegarde annulée.');
     }
 
-    const objectURL = URL.createObjectURL(blob);
-    try {
-      const anchor = document.createElement('a');
-      anchor.href = objectURL;
-      anchor.download = name;
-      anchor.style.display = 'none';
-      document.body.appendChild(anchor);
-      try { anchor.click(); }
-      finally { anchor.remove(); }
-    } finally {
-      setTimeout(() => URL.revokeObjectURL(objectURL), 120000);
-    }
+    // GM_download accepts Blob objects on current Tampermonkey releases.
+    // Its Browser API mode honors relative subdirectories; the HTML anchor
+    // approach cannot create folders.
+    await downloadBlobIntoProfile(blob, path);
+    console.info(PREFIX, 'Fichier transmis à Tampermonkey :', path, blob.size, 'octets');
+    return { skipped: false, name, path, profile, size: blob.size };
+  }
     console.info(PREFIX, 'Sauvegarde renommée demandée :', name,
       blob.size, 'octets');
     return { skipped: false, name, size: blob.size };
@@ -232,8 +285,8 @@
       const msg = getMessage(ref.peerId, ref.mid);
       const result = await saveMessage(msg, ref.peerId);
       if (result.skipped) throw new Error('Ce message ne contient pas une photo ou une video prise en charge.');
-      toast(`JKL : sauvegarde demandée sous ${result.name}`);
-      console.info(PREFIX, 'Fichier envoye au navigateur :', result.name);
+      toast(`JKL : téléchargement terminé → ${result.path}`);
+      console.info(PREFIX, 'Chemin demandé à Tampermonkey :', result.path);
     } catch (err) {
       toast(`Echec : ${err.message || String(err)}`, true);
       console.error(PREFIX, err);
@@ -385,10 +438,12 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.1.4',
+      'JKL Telegram Backup v0.1.5',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
+      'GM_download : ' + yes(typeof GM_download === 'function'),
+      'Mode Tampermonkey : ' + (gmDownloadMode() || 'inconnu'),
       'Lecture messages : ' + yes(typeof page.mtprotoMessagePort?.getMessageByPeer === 'function'),
       'Sélection : ' + yes(typeof page.appImManager?.chat?.selection?.getSelectedMessages === 'function'),
       'Dernier message survolé : ' + (lastHoveredRef ? lastHoveredRef.mid : 'aucun')
@@ -469,7 +524,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.4</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.5</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
@@ -490,7 +545,7 @@
       ' style="display:none;margin-top:8px;color:#97dcff">',
       'Ouvrir Telegram WebK</a>',
       '<div style="margin-top:9px;font-size:11px;opacity:.75">',
-      'Pour renommer, utilise JKL Backup (pas le téléchargement natif Telegram/Firefox).',
+      'Dossier automatique : Téléchargements/NomDuProfil/ via Tampermonkey Browser API.',
       ' Photos sans nom original : photo_ID.jpg. Version expérimentale.</div>',
       '</section>'
     ].join('');
@@ -502,11 +557,13 @@
 
     const refresh = () => {
       const k = isWebK();
-      const downloader = typeof page.appDownloadManager?.downloadToDisc === 'function';
+      const downloader = typeof page.appDownloadManager?.downloadMedia === 'function';
       const lookup = typeof page.mtprotoMessagePort?.getMessageByPeer === 'function';
       status.textContent = (k ? 'WebK : OK' : 'WebK : NON (version non prise en charge)') +
         '\nMoteur renommage : ' + (downloader ? 'OK' : 'indisponible') +
         '\nAccès aux messages : ' + (lookup ? 'OK' : 'indisponible') +
+        '\nDossier profil : ' + (typeof GM_download === 'function' ? 'GM_download disponible' : 'GM_download indisponible') +
+        ' (mode ' + (gmDownloadMode() || 'inconnu') + ')' +
         '\nMédia ciblé : ' + (lastHoveredRef ? '#' + lastHoveredRef.mid : 'aucun (survole une photo/vidéo)');
       webk.style.display = k ? 'none' : 'block';
       webk.href = 'https://web.telegram.org/k/' + location.hash;
@@ -547,8 +604,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.1.4';
-    console.info(PREFIX, 'Panneau v0.1.4 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.1.5';
+    console.info(PREFIX, 'Panneau v0.1.5 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -569,7 +626,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.1.4 pret (WebK).`);
+    console.info(`${PREFIX} v0.1.5 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
