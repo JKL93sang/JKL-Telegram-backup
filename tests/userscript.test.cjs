@@ -9,7 +9,7 @@ const suffix = '\n})();';
 assert.ok(source.trimEnd().endsWith('})();'));
 const index = source.lastIndexOf(suffix);
 assert.ok(index > 0);
-source = source.slice(0, index) + '\nwindow.__testing = {sanitize, dateStamp, getMediaInfo, fileName, saveMessage};' + source.slice(index);
+source = source.slice(0, index) + '\nwindow.__testing = {sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile};' + source.slice(index);
 
 const requests = [];
 const browser = {
@@ -35,15 +35,14 @@ const sandbox = {
   Promise
 };
 vm.runInNewContext(source, sandbox, { filename: filepath });
-const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage } = browser.__testing;
-const savedNames = [];
-const createdUrls = [];
-sandbox.URL = {createObjectURL(blob) { createdUrls.push(blob); return 'blob:demo/' + createdUrls.length; }, revokeObjectURL() {}};
-sandbox.document.createElement = tag => {
-  assert.equal(tag,'a');
-  return {style: {}, click() { savedNames.push({name:this.download, href:this.href}); }, remove() {}};
+const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile } = browser.__testing;
+
+const completed = [];
+sandbox.GM_info = { downloadMode: 'browser' };
+sandbox.GM_download = args => {
+  completed.push(args);
+  args.onload();
 };
-sandbox.document.body.appendChild = () => {};
 
 (async () => {
   assert.equal(sanitize(' A/B:*?\\C '), 'A_B_C');
@@ -73,11 +72,13 @@ sandbox.document.body.appendChild = () => {};
   assert.equal(requests[1].media, video);
   assert.equal(requests[0].thumb.type, 'x');
   assert.equal(requests[0].fileName, undefined, 'media API does not accept an output filename');
-  assert.equal(savedNames[0].name, 'Telegram - 2026-10-12_10-21-04 - photo_25.jpg');
-  assert.equal(savedNames[1].name, 'Telegram - 2026-10-12_10-21-04 - x.mp4');
-  assert.equal(savedNames[0].href, 'blob:demo/1');
-  assert.equal(savedNames[1].href, 'blob:demo/2');
-  assert.equal(savedNames.length, 2);
+  assert.equal(completed[0].name, 'Telegram/Telegram - 2026-10-12_10-21-04 - photo_25.jpg');
+  assert.equal(completed[1].name, 'Telegram/Telegram - 2026-10-12_10-21-04 - x.mp4');
+  assert.equal(completed[0].url.size, 600);
+  assert.equal(completed[1].url.size, 600);
+  assert.equal(completed[0].conflictAction, 'uniquify');
+  assert.equal(completed[0].saveAs, false);
+  assert.equal(completed.length, 2);
   assert.equal((await saveMessage({mid:1,media:{document:pdf}})).skipped, true);
   assert.equal(requests.length, 2);
 
@@ -111,14 +112,30 @@ sandbox.document.body.appendChild = () => {};
   }}};
   await assert.rejects(() => saveMessage(huge), /512 Mio/);
   assert.equal(requests.length, 2, 'oversized files must be blocked before memory allocation');
-  assert.equal(savedNames.length, 2);
+  assert.equal(completed.length, 2);
   const badSize = {mid: 44, date, media: {document: {
     _: 'document', mime_type:'video/mp4', size: 999,
     file_name:'incomplet.mp4', attributes:[]
   }}};
   await assert.rejects(() => saveMessage(badSize), /Taille vidéo incohérente/);
-  assert.equal(savedNames.length, 2, 'truncated downloads must never be offered to Firefox');
-  console.log('OK: téléchargement blob renommé réel (anchor.download), taille, extension, garde-fou mémoire.');
+  assert.equal(completed.length, 2, 'truncated downloads must never be offered to Firefox');
+  assert.equal(profileDownloadPath('Canal Démo / Test', 'exemple.mp4'),
+    'Canal Démo _ Test/exemple.mp4');
+  assert.equal(profileDownloadPath('../../Autre', 'photo.jpg'),
+    '_ _ Autre/photo.jpg'); // no directory traversal from profile names
+  await saveMessage(msgVideo);
+  assert.equal(completed.at(-1).name,
+    'Canal Démo _ Test/Canal Démo _ Test - 2026-10-12_10-21-04 - x.mp4');
+
+  // Errors must never trigger a silent flat-download fallback.
+  const count = completed.length;
+  sandbox.GM_download = args => args.onerror({error:'not_permitted'});
+  await assert.rejects(() => saveMessage(msgVideo), /not_permitted/);
+  assert.equal(completed.length, count);
+  sandbox.GM_info.downloadMode = 'native';
+  await assert.rejects(() => saveMessage(msgVideo), /Browser API/);
+  sandbox.GM_info.downloadMode = 'browser';
+  console.log('OK: GM_download Blob into per-profile directory, renamed files, error/memory protection.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
 
@@ -171,7 +188,7 @@ vm.runInNewContext(source, {
 }, {filename: filepath});
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.4');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.5');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -203,7 +220,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.4');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.5');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
