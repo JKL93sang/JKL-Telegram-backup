@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.1.1
+// @version      0.1.2
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -16,7 +16,7 @@
 // ==/UserScript==
 
 /*
- * v0.1.1 - prototype WebK, sans dependances ni serveur tiers.
+ * v0.1.2 - prototype WebK, sans dependances ni serveur tiers.
  * Exploite downloadToDisc({ media, fileName }) de Telegram WebK.
  * Les messages doivent etre accessibles dans la session Telegram ouverte.
  * Limites: pas de scan historique, pas de controle des doublons, pas d'album
@@ -248,6 +248,7 @@
   // Always-visible launcher: the previous version had no discoverable entrypoint
   // until a particular right-click menu or selection UI was opened.
   let lastHoveredRef = null;
+  let refreshDock = null;
 
   function isWebK() {
     return location.hostname === 'webk.telegram.org' ||
@@ -266,7 +267,10 @@
 
   document.addEventListener('mouseover', event => {
     const ref = readRef(event.target);
-    if (ref) lastHoveredRef = ref;
+    if (ref && (ref.mid !== lastHoveredRef?.mid || String(ref.peerId) !== String(lastHoveredRef?.peerId))) {
+      lastHoveredRef = ref;
+      refreshDock?.();
+    }
   }, true);
 
   function getSoloRef() {
@@ -282,7 +286,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.1.1',
+      'JKL Telegram Backup v0.1.2',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur natif : ' + yes(typeof page.appDownloadManager?.downloadToDisc === 'function'),
@@ -308,7 +312,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:pointer;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.1</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.2</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:50%;top:42px;transform:translateX(-50%);width:316px;',
       'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
@@ -349,6 +353,7 @@
       webk.style.display = k ? 'none' : 'block';
       webk.href = 'https://web.telegram.org/k/' + location.hash;
     };
+    refreshDock = refresh;
     toggle.addEventListener('click', () => {
       panel.hidden = !panel.hidden;
       panel.style.display = panel.hidden ? 'none' : 'block';
@@ -379,8 +384,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.1.1';
-    console.info(PREFIX, 'Panneau v0.1.1 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.1.2';
+    console.info(PREFIX, 'Panneau v0.1.2 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -401,7 +406,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.1.1 pret (WebK).`);
+    console.info(`${PREFIX} v0.1.2 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
