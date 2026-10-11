@@ -255,14 +255,20 @@
       (location.hostname === 'web.telegram.org' && location.pathname.startsWith('/k'));
   }
 
+  // Album items have their own data-mid. Resolve the nearest media's ID.
   function readRef(element) {
-    const bubble = element instanceof Element ? element.closest('[data-mid]') : null;
-    if (!bubble) return null;
-    const peerId = bubble.dataset.peerId ||
-      bubble.closest('[data-peer-id]')?.dataset.peerId ||
+    if (!(element instanceof Element)) return null;
+    const media = element.closest(
+      '.album-item, .media-photo, .media-video, .media-container, ' +
+      '.media-container-aspecter, .video-container'
+    );
+    const item = media?.closest('[data-mid]');
+    if (!item) return null;
+    const peerId = item.dataset.peerId ||
+      item.closest('[data-peer-id]')?.dataset.peerId ||
       page.appImManager?.chat?.peerId;
-    const mid = bubble.dataset.mid;
-    return peerId != null && mid != null ? {peerId, mid} : null;
+    const mid = item.dataset.mid;
+    return peerId != null && mid != null && mid !== '' ? {peerId, mid} : null;
   }
 
   document.addEventListener('mouseover', event => {
