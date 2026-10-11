@@ -1,6 +1,6 @@
 # JKL Telegram Backup
 
-**Statut : prototype expérimental v0.1.0 — téléchargement non validé sur Telegram Web.**
+**Statut : prototype expérimental v0.1.1 — téléchargement non validé sur Telegram Web.**
 
 Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos Telegram. L'objectif est de retrouver une expérience comparable à JKL Instagram Backup, adaptée à Telegram. Le prototype actuel vise **Telegram WebK uniquement**.
 
@@ -8,13 +8,25 @@ Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos
 
 ## Installer le prototype
 
-[**Installer JKL Telegram Backup v0.1.0 (Tampermonkey)**](https://raw.githubusercontent.com/JKL93sang/JKL-Telegram-backup/main/JKL_Telegram_Backup.user.js)
+[**Installer JKL Telegram Backup v0.1.1 (Tampermonkey)**](https://raw.githubusercontent.com/JKL93sang/JKL-Telegram-backup/main/JKL_Telegram_Backup.user.js)
 
 1. Activer Tampermonkey sur Firefox.
 2. Désactiver temporairement le téléchargeur Telegram tiers pour éviter les interactions entre scripts (sans le supprimer).
 3. Installer le lien ci-dessus en confirmant dans Tampermonkey.
 4. Ouvrir [Telegram WebK](https://web.telegram.org/k/) et tester avec **une photo et une vidéo non sensibles**, puis une petite sélection.
 5. Noter précisément si le bouton apparaît, l'erreur affichée et si le fichier est réellement sauvegardé.
+
+## Interface et diagnostic v0.1.1
+
+Le petit bouton **« ↓ JKL Telegram Backup v0.1.1 »** est visible en haut, près du centre de la page Telegram. Il ouvre un panneau affichant :
+- si Telegram WebK (`/k/`) est utilisé ;
+- si le moteur interne Telegram et la lecture des messages sont accessibles ;
+- les actions expérimentales **Télécharger le média survolé** et **Télécharger la sélection** ;
+- **Copier diagnostic** pour analyser un problème précis.
+
+Si Telegram est ouvert sur `/a/`, le panneau propose un lien vers WebK ; les fonctions internes du script ne sont pas prévues pour WebA. Si le moteur ou la lecture apparaissent « indisponible », les boutons de téléchargement ne peuvent pas fonctionner sur cette session : le signaler avec le diagnostic pour adapter le code, sans multiplier les essais.
+
+**Important :** l'interface visible est vérifiée par tests automatisés. Le téléchargement réel et la détection des messages restent non validés sur le navigateur de l'utilisateur.
 
 ## Objectifs
 
@@ -32,7 +44,8 @@ Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos
 | --- | --- |
 | Noms de fichiers avec date, média et ID | Implémenté ; tests unitaires |
 | Filtrage photos, vidéos, GIF | Implémenté ; tests unitaires |
-| Téléchargement unitaire depuis le menu d'un message | Prototype ; **non testé sur Telegram Web** |
+| Bouton d'ouverture et diagnostic WebK/WebA | Implémenté ; tests automatisés |
+| Téléchargement unitaire depuis le menu ou un message survolé | Prototype ; **non testé sur Telegram Web** |
 | Téléchargement de messages sélectionnés | Prototype ; **non testé sur Telegram Web** |
 | Bouton intégré à la visionneuse | Non implémenté |
 | Scan d'un canal complet / historique | Non implémenté |
