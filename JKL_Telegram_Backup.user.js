@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.2.0
+// @version      0.2.1
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -19,7 +19,7 @@
 // ==/UserScript==
 
 /*
- * v0.2.0 - WebK only, no external services.
+ * v0.2.1 - WebK only, no external services.
  * SOLO / selection: fetch original media Blob, GM_download into profile folder.
  * ALL: paginate the accessible history with Telegram's getHistory media filters.
  * Sequential queue, explicit stop, progress, persistent success ledger/resume.
@@ -455,6 +455,50 @@
       expected: Number.isFinite(result.count) ? result.count : null };
   }
 
+
+  function reportKey(ctx) {
+    return 'JKL_TG_REPORT_V1:' + String(ctx.peerId) + ':' + String(ctx.threadId || 0);
+  }
+
+  function currentReportContext() {
+    const chat = page.appImManager?.chat;
+    if (chat?.peerId == null) return null;
+    return {peerId:chat.peerId, threadId:Number(chat.threadId) || undefined};
+  }
+
+  function failureDescription(msg, info, error) {
+    const mid = String(msg.mid ?? msg.id ?? 'inconnu');
+    const rawSize = info.media?._ === 'photo'
+      ? largestPhotoSize(info.media)?.size : info.media?.size;
+    const size = Number(rawSize);
+    const formattedSize = rawSize != null && Number.isFinite(size)
+      ? (size / 1048576).toFixed(2) + ' Mio' : 'taille inconnue';
+    const reason = String(error?.message || error || 'Erreur inconnue')
+      .replace(/\s+/g, ' ').slice(0, 320);
+    return {mid, type:info.type || 'MEDIA', size:formattedSize, reason};
+  }
+
+  function saveLastReport(job) {
+    try {
+      localStorage.setItem(reportKey(job.ctx), bulkText(job));
+    } catch (error) {
+      console.warn(PREFIX, 'Rapport du backup non persisté', error);
+    }
+  }
+
+  function reportForOpenChat() {
+    const ctx = currentReportContext();
+    if (!ctx) return '';
+    const matches = job => job &&
+      String(job.ctx?.peerId) === String(ctx.peerId) &&
+      Number(job.ctx?.threadId || 0) === Number(ctx.threadId || 0);
+    if (matches(bulkJob)) return bulkText(bulkJob);
+    if (matches(lastBulkResult)) return bulkText(lastBulkResult);
+    try {
+      return localStorage.getItem(reportKey(ctx)) || '';
+    } catch { return ''; }
+  }
+
   function bulkText(job) {
     return [
       job.stage,
@@ -463,8 +507,17 @@
       'Médias trouvés : ' + job.found,
       'Enregistrés : ' + job.done + ' | Déjà faits : ' + job.skipped,
       'Erreurs : ' + job.errors + ' | Filtres terminés : ' + job.finished + '/' + HISTORY_FILTERS.length,
-      job.detail || ''
-    ].join('\n');
+      job.detail || '',
+      ...(job.failures?.length ? [
+        'Détail des échecs :',
+        ...job.failures.map((item, index) =>
+          (index + 1) + '. #' + item.mid + ' · ' + item.type +
+          ' · ' + item.size + ' · ' + item.reason),
+        ...(job.errors > job.failures.length
+          ? ['… ' + (job.errors - job.failures.length) + ' erreurs supplémentaires (voir F12).']
+          : [])
+      ] : [])
+    ].filter(Boolean).join('\n');
   }
 
   function bulkStatus(job) {
@@ -486,7 +539,8 @@
     const job = bulkJob = {
       ctx, cancelled:false, stage:'Préparation du scan…', detail:'',
       pages:0, found:0, done:0, skipped:0, errors:0,
-      finished:0, seen:new Set(), ledger, ledgerSafe:true, complete:false
+      finished:0, seen:new Set(), ledger, ledgerSafe:true, complete:false,
+      failures: []
     };
     running = true;
     bulkStatus(job);
@@ -544,8 +598,11 @@
               job.done++;
             } catch (err) {
               job.errors++;
-              console.error(PREFIX, 'Backup message échoué', key, err);
-              job.detail = 'Échec #' + String(msg.mid) + ' : ' + (err.message || err);
+              const failure = failureDescription(msg, info, err);
+              if (job.failures.length < 100) job.failures.push(failure);
+              console.error(PREFIX, 'Backup message échoué', key, failure, err);
+              job.detail = 'Échec #' + failure.mid + ' : ' + failure.reason;
+              saveLastReport(job);
             }
             bulkStatus(job);
             if (!job.cancelled) await delay(GAP_MS);
@@ -590,6 +647,7 @@
       toast('Backup incomplet : ' + job.detail, true);
     } finally {
       lastBulkResult = job;
+      saveLastReport(job);
       bulkStatus(job);
       running = false;
       bulkJob = null;
@@ -706,12 +764,12 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.2.0',
+      'JKL Telegram Backup v0.2.1',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
       'GM_download : ' + yes(typeof GM_download === 'function'),
-      'Backup : ' + (bulkJob ? bulkText(bulkJob) : lastBulkResult ? bulkText(lastBulkResult) : 'inactif'),
+      'Backup : ' + (reportForOpenChat() || 'inactif'),
       'Mode Tampermonkey : ' + (gmDownloadMode() || 'inconnu'),
       'Lecture messages : ' + yes(typeof page.mtprotoMessagePort?.getMessageByPeer === 'function'),
       'Sélection : ' + yes(typeof page.appImManager?.chat?.selection?.getSelectedMessages === 'function'),
@@ -794,7 +852,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.0</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.1</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);overflow-y:auto;',
@@ -906,8 +964,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.2.0';
-    console.info(PREFIX, 'Panneau v0.2.0 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.2.1';
+    console.info(PREFIX, 'Panneau v0.2.1 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -928,7 +986,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.2.0 pret (WebK).`);
+    console.info(`${PREFIX} v0.2.1 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
