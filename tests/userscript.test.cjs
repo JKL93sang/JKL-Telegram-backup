@@ -132,6 +132,18 @@ sandbox.GM_download = args => {
   sandbox.GM_download = args => args.onerror({error:'not_permitted'});
   await assert.rejects(() => saveMessage(msgVideo), /not_permitted/);
   assert.equal(completed.length, count);
+  // Tampermonkey protects downloadable extensions separately from Browser API.
+  // Error must state which safe video extension to add, without unsafe fallback.
+  sandbox.GM_download = args => args.onerror({error:'not_whitelisted'});
+  await assert.rejects(() => saveMessage(msgVideo), err =>
+    /Extension [.]mp4 non autorisée/.test(err.message) &&
+    /Whitelisted File Extensions/.test(err.message) &&
+    /not_whitelisted/.test(err.message));
+  await assert.rejects(() =>
+    downloadBlobIntoProfile({size:1}, 'Profil/média.WEBM'), err =>
+      /Extension [.]webm non autorisée/.test(err.message) &&
+      /Browser API/.test(err.message));
+  assert.equal(completed.length, count, 'blocked extensions must not save unexpected files');
   sandbox.GM_info.downloadMode = 'native';
   await assert.rejects(() => saveMessage(msgVideo), /Browser API/);
   sandbox.GM_info.downloadMode = 'browser';
@@ -189,7 +201,7 @@ vm.runInNewContext(source, {
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
 assert.match(appended.html, /Copier rapport du backup/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.1');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.2');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -221,7 +233,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.1');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.2');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
