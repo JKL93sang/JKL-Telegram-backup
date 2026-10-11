@@ -273,10 +273,6 @@
     console.info(PREFIX, 'Fichier transmis à Tampermonkey :', path, blob.size, 'octets');
     return { skipped: false, name, path, profile, size: blob.size };
   }
-    console.info(PREFIX, 'Sauvegarde renommée demandée :', name,
-      blob.size, 'octets');
-    return { skipped: false, name, size: blob.size };
-  }
 
   async function saveSingle(ref) {
     if (running) return toast('Un telechargement JKL est deja en cours.');
