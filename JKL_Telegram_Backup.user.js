@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.1.3
+// @version      0.1.4
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -16,7 +16,7 @@
 // ==/UserScript==
 
 /*
- * v0.1.3 - prototype WebK, sans dependances ni serveur tiers.
+ * v0.1.4 - prototype WebK, sans dependances ni serveur tiers.
  * Exploite downloadToDisc({ media, fileName }) de Telegram WebK.
  * Les messages doivent etre accessibles dans la session Telegram ouverte.
  * Limites: pas de scan historique, pas de controle des doublons, pas d'album
@@ -30,6 +30,8 @@
 
   const PREFIX = '[JKL TG Backup]';
   const GAP_MS = 550;
+  // Blob downloads consume memory: never silently save unrenamed large files.
+  const MAX_RENAMED_BYTES = 512 * 1024 * 1024;
   let pending = null;
   let running = false;
   let toastTimer = null;
@@ -157,14 +159,70 @@
     return msg;
   }
 
+
+  function largestPhotoSize(photo) {
+    const sizes = Array.isArray(photo.sizes) ? photo.sizes : [];
+    const valid = sizes.filter(size => size && size._ !== 'photoSizeEmpty');
+    return valid.length ? valid[valid.length - 1] : null;
+  }
+
   async function saveMessage(msg, peerId) {
     const info = getMediaInfo(msg);
     if (!info) return { skipped: true };
-    const nativeDownload = page.appDownloadManager?.downloadToDisc;
-    if (typeof nativeDownload !== 'function') throw new Error('Moteur de telechargement WebK indisponible.');
-    const name = fileName(msg, info);
-    await nativeDownload.call(page.appDownloadManager, { media: info.media, fileName: name });
-    return { skipped: false, name };
+
+    const downloader = page.appDownloadManager?.downloadMedia;
+    if (typeof downloader !== 'function') {
+      throw new Error('Moteur Blob Telegram WebK indisponible. Aucun fichier enregistré.');
+    }
+    if (typeof URL.createObjectURL !== 'function') {
+      throw new Error('Sauvegarde renommée impossible : Blob URL indisponible.');
+    }
+
+    const name = fileName(msg, info, peerId);
+    const photoSize = info.media._ === 'photo' ? largestPhotoSize(info.media) : null;
+    if (info.media._ === 'photo' && !photoSize) {
+      throw new Error('Taille de photo Telegram indisponible.');
+    }
+    const expectedSize = info.media._ === 'document'
+      ? Number(info.media.size)
+      : Number(photoSize?.size);
+    if (Number.isFinite(expectedSize) && expectedSize > MAX_RENAMED_BYTES) {
+      throw new Error('Média supérieur à 512 Mio : sauvegarde renommée bloquée pour préserver la mémoire.');
+    }
+
+    // In WebK, downloadToDisc's streaming Service Worker uses the internal
+    // document filename, ignoring our filename option. For renaming, fetch
+    // the Blob then trigger <a download="custom-name"> instead.
+    const request = { media: info.media };
+    if (photoSize) request.thumb = photoSize;
+    const blob = await downloader.call(page.appDownloadManager, request);
+    if (!blob || typeof blob.size !== 'number' || typeof blob.slice !== 'function') {
+      throw new Error('Telegram a renvoyé un contenu invalide : fichier non enregistré.');
+    }
+    if (blob.size > MAX_RENAMED_BYTES) {
+      throw new Error('Média téléchargé supérieur à 512 Mio : sauvegarde annulée.');
+    }
+    if (info.media._ === 'document' && Number.isFinite(expectedSize) &&
+      expectedSize > 0 && blob.size !== expectedSize) {
+      throw new Error('Taille vidéo incohérente (' + blob.size + '/' + expectedSize +
+        ' octets) : sauvegarde annulée.');
+    }
+
+    const objectURL = URL.createObjectURL(blob);
+    try {
+      const anchor = document.createElement('a');
+      anchor.href = objectURL;
+      anchor.download = name;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
+      try { anchor.click(); }
+      finally { anchor.remove(); }
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(objectURL), 120000);
+    }
+    console.info(PREFIX, 'Sauvegarde renommée demandée :', name,
+      blob.size, 'octets');
+    return { skipped: false, name, size: blob.size };
   }
 
   async function saveSingle(ref) {
@@ -174,7 +232,7 @@
       const msg = getMessage(ref.peerId, ref.mid);
       const result = await saveMessage(msg, ref.peerId);
       if (result.skipped) throw new Error('Ce message ne contient pas une photo ou une video prise en charge.');
-      toast(`JKL : fichier demandé sous le nom ${result.name}`);
+      toast(`JKL : sauvegarde demandée sous ${result.name}`);
       console.info(PREFIX, 'Fichier envoye au navigateur :', result.name);
     } catch (err) {
       toast(`Echec : ${err.message || String(err)}`, true);
@@ -327,10 +385,10 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.1.3',
+      'JKL Telegram Backup v0.1.4',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
-      'Moteur natif : ' + yes(typeof page.appDownloadManager?.downloadToDisc === 'function'),
+      'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
       'Lecture messages : ' + yes(typeof page.mtprotoMessagePort?.getMessageByPeer === 'function'),
       'Sélection : ' + yes(typeof page.appImManager?.chat?.selection?.getSelectedMessages === 'function'),
       'Dernier message survolé : ' + (lastHoveredRef ? lastHoveredRef.mid : 'aucun')
@@ -411,7 +469,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.3</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.1.4</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
@@ -447,7 +505,7 @@
       const downloader = typeof page.appDownloadManager?.downloadToDisc === 'function';
       const lookup = typeof page.mtprotoMessagePort?.getMessageByPeer === 'function';
       status.textContent = (k ? 'WebK : OK' : 'WebK : NON (version non prise en charge)') +
-        '\nMoteur téléchargement : ' + (downloader ? 'OK' : 'indisponible') +
+        '\nMoteur renommage : ' + (downloader ? 'OK' : 'indisponible') +
         '\nAccès aux messages : ' + (lookup ? 'OK' : 'indisponible') +
         '\nMédia ciblé : ' + (lastHoveredRef ? '#' + lastHoveredRef.mid : 'aucun (survole une photo/vidéo)');
       webk.style.display = k ? 'none' : 'block';
@@ -489,8 +547,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.1.3';
-    console.info(PREFIX, 'Panneau v0.1.3 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.1.4';
+    console.info(PREFIX, 'Panneau v0.1.4 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -511,7 +569,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.1.3 pret (WebK).`);
+    console.info(`${PREFIX} v0.1.4 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
