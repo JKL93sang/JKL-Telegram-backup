@@ -45,6 +45,7 @@
   let toastTimer = null;
   let bulkJob = null;
   let renderBulkProgress = null;
+  let lastBulkResult = null;
 
   const page = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -481,6 +482,7 @@
       toast('Backup complet : ' + (err.message || err), true);
       return;
     }
+    lastBulkResult = null;
     const job = bulkJob = {
       ctx, cancelled:false, stage:'Préparation du scan…', detail:'',
       pages:0, found:0, done:0, skipped:0, errors:0,
@@ -585,6 +587,7 @@
       console.error(PREFIX, 'Backup incomplet', err);
       toast('Backup incomplet : ' + job.detail, true);
     } finally {
+      lastBulkResult = job;
       bulkStatus(job);
       running = false;
       bulkJob = null;
@@ -706,9 +709,11 @@
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
       'GM_download : ' + yes(typeof GM_download === 'function'),
+      'Backup : ' + (bulkJob ? bulkText(bulkJob) : lastBulkResult ? bulkText(lastBulkResult) : 'inactif'),
       'Mode Tampermonkey : ' + (gmDownloadMode() || 'inconnu'),
       'Lecture messages : ' + yes(typeof page.mtprotoMessagePort?.getMessageByPeer === 'function'),
       'Sélection : ' + yes(typeof page.appImManager?.chat?.selection?.getSelectedMessages === 'function'),
+      'Historique : ' + yes(typeof (page.appImManager?.chat?.managers?.appMessagesManager || page.appImManager?.managers?.appMessagesManager)?.getHistory === 'function'),
       'Dernier message survolé : ' + (lastHoveredRef ? lastHoveredRef.mid : 'aucun')
     ].join('\n');
   }
@@ -790,7 +795,8 @@
       '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.0</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
-      'max-width:calc(100vw - 24px);padding:12px;border-radius:13px;',
+      'max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);overflow-y:auto;',
+      'padding:12px;border-radius:13px;',
       'background:#142b39;border:1px solid #557083;line-height:1.45">',
       '<strong>JKL Telegram Backup</strong>',
       '<div id="jkl-tg-status" style="white-space:pre-line;margin:8px 0 11px;',
@@ -801,6 +807,18 @@
       '<button id="jkl-tg-selected" type="button" style="cursor:pointer;padding:8px;',
       'border:0;border-radius:7px;background:#34718b;color:white;margin-bottom:6px">',
       'Télécharger la sélection</button>',
+      '<div style="margin:10px 0 8px;padding-top:10px;border-top:1px solid #557083">',
+      '<strong>Backup complet du canal ouvert</strong></div>',
+      '<button id="jkl-tg-all" type="button" style="cursor:pointer;padding:8px;',
+      'border:0;border-radius:7px;background:#168064;color:white;margin-right:6px">',
+      'Tout récupérer</button>',
+      '<button id="jkl-tg-stop" type="button" disabled',
+      ' style="cursor:pointer;padding:8px;border:1px solid #b96767;border-radius:7px;',
+      'background:transparent;color:#f1aaaa">Arrêter</button>',
+      '<progress id="jkl-tg-bulk-progress" style="display:none;width:100%;margin-top:9px"></progress>',
+      '<div id="jkl-tg-bulk-status" role="status" aria-live="polite"',
+      ' style="white-space:pre-line;font-size:12px;margin:8px 0;color:#b8d5e7">',
+      'Prêt à parcourir les photos, vidéos et fichiers médias accessibles.</div>',
       '<button id="jkl-tg-diag" type="button" style="cursor:pointer;padding:7px;',
       'border:1px solid #50758b;border-radius:7px;background:transparent;color:#eaf4ff">',
       'Copier diagnostic</button>',
@@ -808,7 +826,8 @@
       ' style="display:none;margin-top:8px;color:#97dcff">',
       'Ouvrir Telegram WebK</a>',
       '<div style="margin-top:9px;font-size:11px;opacity:.75">',
-      'Dossier automatique : Téléchargements/NomDuProfil/ via Tampermonkey Browser API.',
+      'Tout récupérer = photos, vidéos et médias envoyés en fichier du canal ouvert.',
+      ' Arrêt et reprise possibles, sans retélécharger les médias déjà enregistrés.',
       ' Photos sans nom original : photo_ID.jpg. Version expérimentale.</div>',
       '</section>'
     ].join('');
@@ -817,14 +836,29 @@
     const panel = root.querySelector('#jkl-tg-panel');
     const status = root.querySelector('#jkl-tg-status');
     const webk = root.querySelector('#jkl-tg-webk');
+    const allButton = root.querySelector('#jkl-tg-all');
+    const stopButton = root.querySelector('#jkl-tg-stop');
+    const bulkLabel = root.querySelector('#jkl-tg-bulk-status');
+    const bulkProgress = root.querySelector('#jkl-tg-bulk-progress');
+    renderBulkProgress = job => {
+      const active = Boolean(bulkJob);
+      allButton.disabled = active;
+      stopButton.disabled = !active || bulkJob?.cancelled;
+      bulkLabel.textContent = job ? bulkText(job) : 'Prêt : ouvre un canal puis clique sur Tout récupérer.';
+      bulkProgress.style.display = active ? 'block' : 'none';
+      if (active) bulkProgress.removeAttribute('value');
+    };
 
     const refresh = () => {
       const k = isWebK();
       const downloader = typeof page.appDownloadManager?.downloadMedia === 'function';
       const lookup = typeof page.mtprotoMessagePort?.getMessageByPeer === 'function';
+      const history = typeof (page.appImManager?.chat?.managers?.appMessagesManager ||
+        page.appImManager?.managers?.appMessagesManager)?.getHistory === 'function';
       status.textContent = (k ? 'WebK : OK' : 'WebK : NON (version non prise en charge)') +
         '\nMoteur renommage : ' + (downloader ? 'OK' : 'indisponible') +
         '\nAccès aux messages : ' + (lookup ? 'OK' : 'indisponible') +
+        '\nAPI historique : ' + (history ? 'OK' : 'indisponible') +
         '\nDossier profil : ' + (typeof GM_download === 'function' ? 'GM_download disponible' : 'GM_download indisponible') +
         ' (mode ' + (gmDownloadMode() || 'inconnu') + ')' +
         '\nMédia ciblé : ' + (lastHoveredRef ? '#' + lastHoveredRef.mid : 'aucun (survole une photo/vidéo)');
@@ -857,6 +891,9 @@
       await saveSelection(event.currentTarget);
       refresh();
     });
+    allButton.addEventListener('click', () => { void backupAll(); });
+    stopButton.addEventListener('click', stopBackup);
+    renderBulkProgress(lastBulkResult);
     root.querySelector('#jkl-tg-diag').addEventListener('click', async () => {
       const report = diagnostics();
       try {
