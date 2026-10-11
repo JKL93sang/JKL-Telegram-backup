@@ -17,4 +17,4 @@ jobs:
       - name: Check userscript syntax
         run: node --check JKL_Telegram_Backup.user.js
       - name: Run unit checks
-        run: node tests/userscript.test.cjs
+        run: node tests/userscript.test.cjs && node tests/full-backup.test.cjs

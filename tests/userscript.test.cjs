@@ -188,7 +188,7 @@ vm.runInNewContext(source, {
 }, {filename: filepath});
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.5');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.0');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -220,7 +220,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.1.5');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.0');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
