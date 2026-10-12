@@ -63,8 +63,8 @@ sandbox.GM_download = args => {
   assert.equal(getMediaInfo({media:{document:pdf}}), null);
   assert.equal(getMediaInfo({media:{}}), null);
 
-  assert.equal(fileName(msgPhoto, getMediaInfo(msgPhoto)), 'Telegram - 2026-10-12_10-21-04 - photo_25.jpg');
-  assert.equal(fileName(msgVideo, getMediaInfo(msgVideo)), 'Telegram - 2026-10-12_10-21-04 - x.mp4');
+  assert.equal(fileName(msgPhoto, getMediaInfo(msgPhoto)), 'Profil_-100123 - 2026-10-12_10-21-04 - photo_25.jpg');
+  assert.equal(fileName(msgVideo, getMediaInfo(msgVideo)), 'Profil_-100123 - 2026-10-12_10-21-04 - x.mp4');
   await saveMessage(msgPhoto);
   await saveMessage(msgVideo);
   assert.equal(requests.length, 2);
@@ -72,8 +72,8 @@ sandbox.GM_download = args => {
   assert.equal(requests[1].media, video);
   assert.equal(requests[0].thumb.type, 'x');
   assert.equal(requests[0].fileName, undefined, 'media API does not accept an output filename');
-  assert.equal(completed[0].name, 'Telegram/Telegram - 2026-10-12_10-21-04 - photo_25.jpg');
-  assert.equal(completed[1].name, 'Telegram/Telegram - 2026-10-12_10-21-04 - x.mp4');
+  assert.equal(completed[0].name, 'Profil_-100123/Profil_-100123 - 2026-10-12_10-21-04 - photo_25.jpg');
+  assert.equal(completed[1].name, 'Profil_-100123/Profil_-100123 - 2026-10-12_10-21-04 - x.mp4');
   assert.equal(completed[0].url.size, 600);
   assert.equal(completed[1].url.size, 600);
   assert.equal(completed[0].conflictAction, 'uniquify');
@@ -150,6 +150,7 @@ sandbox.GM_download = args => {
 
   // Emoji-only chat titles: real emoji, flags, keycaps, Telegram custom emoji
   // rendered without DOM text. The peer ID makes the folder deterministic.
+  sandbox.GM_download = args => { completed.push(args); args.onload(); };
   browser.appImManager = {chat: {peerId:'-100123'}};
   const previousSelector = sandbox.document.querySelector;
   for (const label of ['🔥😈', '🇫🇷', '1️⃣', '❤️']) {
