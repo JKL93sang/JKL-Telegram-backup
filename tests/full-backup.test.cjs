@@ -230,6 +230,8 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusFo
   // A user-selected local folder (Firefox webkitdirectory) is authoritative.
   // It can rescue files already on disk despite an erased browser manifest.
   storage.clear();
+  currentUsername='official_channel';
+  title='Canal de test';
   const savedSet=completed.slice(beforeUsername,beforeUsername+3);
   const files=savedSet.map(entry => ({
     name:entry.name.split('/').at(-1),
