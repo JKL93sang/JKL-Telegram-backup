@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.2.3
+// @version      0.2.4
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -19,7 +19,7 @@
 // ==/UserScript==
 
 /*
- * v0.2.3 - WebK only, no external services.
+ * v0.2.4 - WebK only, no external services.
  * SOLO / selection: fetch original media Blob, GM_download into profile folder.
  * ALL: paginate the accessible history with Telegram's getHistory media filters.
  * Sequential queue, explicit stop, progress, persistent success ledger/resume.
@@ -146,6 +146,88 @@
     }
     // Never use a shared generic directory for different emoji-only chats.
     return safeProfileFallback(peerId);
+  }
+
+
+  // A peer's folder is sticky across username/title changes. The mapping is
+  // keyed by Telegram's stable peer ID, not by a mutable public @username.
+  const FOLDER_KEY_PREFIX = 'JKL_TG_FOLDER_V1:';
+
+  function profileFolderKey(peerId) {
+    return FOLDER_KEY_PREFIX + String(peerId);
+  }
+
+  function knownProfileFolder(peerId) {
+    if (peerId === undefined || peerId === null || peerId === '') return null;
+    const saved = localStorage.getItem(profileFolderKey(peerId));
+    if (!saved) return null;
+    // Only simple folder components produced by filePart are accepted.
+    if (saved === '.' || saved === '..' || saved.includes('/') ||
+        saved.includes('\\') || !saved.trim() || saved === 'Telegram') {
+      throw new Error('Dossier mémorisé invalide pour le profil ' + String(peerId) +
+        '. Sauvegarde arrêtée pour éviter un mélange de dossiers.');
+    }
+    return filePart(saved, safeProfileFallback(peerId), 70);
+  }
+
+  function legacyHasSuccessfulBackup(peerId, threadId) {
+    const keys = [
+      'JKL_TG_OK_V1:' + String(peerId) + ':' + String(threadId || 0),
+      'JKL_TG_OK_V1:' + String(peerId) + ':0'
+    ];
+    for (const key of keys) {
+      const record = localStorage.getItem(key);
+      if (!record) continue;
+      const parsed = JSON.parse(record);
+      if (Array.isArray(parsed) && parsed.length) return true;
+    }
+    return false;
+  }
+
+  async function readPeerUsername(peerId) {
+    const chat = page.appImManager?.chat;
+    const managers = chat?.managers || page.appImManager?.managers;
+    const getUsername = managers?.appPeersManager?.getPeerUsername;
+    if (typeof getUsername !== 'function') return '';
+    // This is WebK's own API for the active public username. Never scrape
+    // a Telegram URL or extract a username from a message sender.
+    let username;
+    try {
+      username = await getUsername.call(managers.appPeersManager, peerId);
+    } catch (err) {
+      console.warn(PREFIX, 'Pseudo Telegram indisponible, nom affiché utilisé', err);
+      return '';
+    }
+    const value = String(username || '').replace(/^@/, '').trim();
+    return /^[A-Za-z0-9_]{1,64}$/.test(value) ? value : '';
+  }
+
+  async function resolveProfileFolder(peerId, threadId) {
+    const currentPeerId = peerId ?? page.appImManager?.chat?.peerId;
+    if (currentPeerId === undefined || currentPeerId === null || currentPeerId === '') {
+      throw new Error('Identifiant Telegram indisponible : dossier de profil non déterminé.');
+    }
+    const saved = knownProfileFolder(currentPeerId);
+    if (saved) return saved;
+
+    // v0.2.3 saved files under the visible title, or Profil_<peerId>
+    // for emoji-only titles. There was no folder registry at that time.
+    // If a success ledger already exists, pin the legacy naming convention
+    // before introducing username-first for NEW profiles.
+    const legacy = legacyHasSuccessfulBackup(currentPeerId, threadId);
+    const username = legacy ? '' : await readPeerUsername(currentPeerId);
+    const candidate = legacy
+      ? currentChatLabel(currentPeerId)
+      : username || currentChatLabel(currentPeerId);
+    const name = filePart(candidate, safeProfileFallback(currentPeerId), 70);
+    if (name === 'Telegram') {
+      throw new Error('Dossier de profil non déterminé : nom et identifiant indisponibles.');
+    }
+
+    // The registry cannot be used to infer/rename an existing filesystem
+    // folder. A write failure must be explicit, not silently split archives.
+    localStorage.setItem(profileFolderKey(currentPeerId), name);
+    return name;
   }
 
   function fileName(msg, mediaInfo, profile = currentChatLabel(msg?.peerId)) {
@@ -291,7 +373,7 @@
     if (mode === 'native' || mode === 'disabled') {
       throw new Error('Pour créer les dossiers : Tampermonkey → Téléchargements → Browser API.');
     }
-    const profile = profileOverride || currentChatLabel(peerId ?? msg.peerId);
+    const profile = profileOverride || await resolveProfileFolder(peerId ?? msg.peerId);
     const name = fileName(msg, info, profile);
     const path = profileDownloadPath(profile, name);
     const photoSize = info.media._ === 'photo' ? largestPhotoSize(info.media) : null;
@@ -390,7 +472,7 @@
   }
 
 
-  function bulkContext() {
+  async function bulkContext() {
     if (!isWebK()) throw new Error('Backup complet : ouvre Telegram WebK (/k/).');
     const chat = page.appImManager?.chat;
     const peerId = chat?.peerId;
@@ -408,12 +490,9 @@
     }
     // A forum thread has its own search context, unlike the channel's main feed.
     const threadId = Number(chat.threadId) || undefined;
-    // A channel with emoji-only/custom-emoji title must not be blocked.
-    // Use its stable peer ID when a readable name is unavailable.
-    const profile = currentChatLabel(peerId);
-    if (profile === 'Telegram') {
-      throw new Error('Identifiant du profil indisponible : dossier unique impossible.');
-    }
+    // The resolved folder stays stable across title/username changes and
+    // is shared by SOLO and full backup for this peer.
+    const profile = await resolveProfileFolder(peerId, threadId);
     return { peerId, threadId, profile, manager };
   }
 
@@ -573,7 +652,7 @@
     let ctx;
     let ledger;
     try {
-      ctx = bulkContext();
+      ctx = await bulkContext();
       ledger = loadLedger(ctx);
     } catch (err) {
       toast('Backup complet : ' + (err.message || err), true);
@@ -808,7 +887,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.2.3',
+      'JKL Telegram Backup v0.2.4',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
@@ -896,7 +975,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.3</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.4</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);overflow-y:auto;',
@@ -1024,8 +1103,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.2.3';
-    console.info(PREFIX, 'Panneau v0.2.3 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.2.4';
+    console.info(PREFIX, 'Panneau v0.2.4 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -1046,7 +1125,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.2.3 pret (WebK).`);
+    console.info(`${PREFIX} v0.2.4 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
