@@ -242,6 +242,17 @@ sandbox.GM_download = args => {
   username='something_else';
   assert.equal(await resolveProfileFolder('-100456'),'reassigned_name_-100456');
 
+  // Hover extracts peer IDs as text; pass WebK's native typed chat peer ID
+  // into its manager, instead of the string from the dataset.
+  folderStore.clear();
+  browser.appImManager.chat.peerId=-100789;
+  browser.appImManager.chat.managers.appPeersManager.getPeerUsername = id => {
+    assert.equal(typeof id, 'number');
+    assert.equal(id, -100789);
+    return 'numeric_user';
+  };
+  assert.equal(await resolveProfileFolder('-100789'),'numeric_user');
+
   sandbox.document.querySelector = previousSelector;
   console.log('OK: username-first, stable per-peer folders, emoji fallback and legacy archive pinning.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
