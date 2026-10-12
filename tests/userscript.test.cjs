@@ -282,7 +282,7 @@ class FakeElement {
 const documentEvents = new Map();
 const storage = new Map();
 const fakeDocument = {
-  body: {appendChild(el) { appended = el; }},
+  body: {appendChild(el) { if (el.id === 'jkl-tg-dock') appended = el; }},
   documentElement: {dataset: {}},
   createElement() { return new FakeElement(); },
   getElementById(id) { return appended?.id === id ? appended : null; },
