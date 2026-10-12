@@ -309,7 +309,9 @@ vm.runInNewContext(source, {
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
 assert.match(appended.html, /Copier rapport du backup/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.5');
+assert.match(appended.html, /Choisir un dossier existant/);
+assert.match(appended.html, /webkitdirectory directory multiple hidden/);
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.6');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -320,10 +322,19 @@ toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : OK/);
 assert.equal(widgets.get('#jkl-tg-webk').style.display, 'none');
 // Completion indicator appears on the collapsed launcher AND within the panel.
+// Opening the native directory picker must occur synchronously on click.
+const pickerInput = widgets.get('#jkl-tg-folder-input');
+let pickerClicks=0;
+pickerInput.click=()=>{pickerClicks++;};
+const pickerButton = widgets.get('#jkl-tg-folder');
+pickerButton.listeners.click();
+assert.equal(pickerClicks,0,'cannot choose folder without a chat');
 const chip = widgets.get('#jkl-tg-state-chip');
 const panelState = widgets.get('#jkl-tg-final-state');
 assert.equal(chip.textContent, 'Prêt');
 uiWindow.appImManager = {chat:{peerId:'-10042'}};
+pickerButton.listeners.click();
+assert.equal(pickerClicks,1,'directory picker must be initiated on user click');
 storage.set('JKL_TG_STATE_V1:-10042:0',
   JSON.stringify({kind:'complete',label:'Terminé · 411 médias'}));
 toggle.listeners.click();
@@ -370,7 +381,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.5');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.6');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
