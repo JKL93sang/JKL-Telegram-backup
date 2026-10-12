@@ -860,7 +860,8 @@
       ctx, cancelled:false, stage:'Préparation du scan…', detail:'',
       pages:0, found:0, done:0, skipped:0, errors:0,
       finished:0, seen:new Set(), ledger, ledgerSafe:true, complete:false,
-      diskFound:0, missingFromDisk:0, folder, failures: []
+      diskFound:0, missingFromDisk:0, folder, diskMatchedNames:new Set(),
+      failures: []
     };
     running = true;
     persistBackupState(job, true);
@@ -907,7 +908,13 @@
             job.found++;
             if (folder) {
               const name = fileName(msg, info, ctx.profile);
-              if (findExistingDiskFile(folder, ctx, name, info)) {
+              const diskNameKey = normalizedDiskName(name);
+              // The legacy filename convention may give two messages the
+              // same filename (same second + same original media name).
+              // A single file on disk must never prove BOTH are saved.
+              if (!job.diskMatchedNames.has(diskNameKey) &&
+                  findExistingDiskFile(folder, ctx, name, info)) {
+                job.diskMatchedNames.add(diskNameKey);
                 job.diskFound++;
                 job.skipped++;
                 // Recover old existing media even if a previous browser ledger
