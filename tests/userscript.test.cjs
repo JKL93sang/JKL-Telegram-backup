@@ -9,7 +9,7 @@ const suffix = '\n})();';
 assert.ok(source.trimEnd().endsWith('})();'));
 const index = source.lastIndexOf(suffix);
 assert.ok(index > 0);
-source = source.slice(0, index) + '\nwindow.__testing = {sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile};' + source.slice(index);
+source = source.slice(0, index) + '\nwindow.__testing = {sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile, currentChatLabel, containsReadableProfileText};' + source.slice(index);
 
 const requests = [];
 const browser = {
@@ -35,7 +35,7 @@ const sandbox = {
   Promise
 };
 vm.runInNewContext(source, sandbox, { filename: filepath });
-const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile } = browser.__testing;
+const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile, currentChatLabel, containsReadableProfileText } = browser.__testing;
 
 const completed = [];
 sandbox.GM_info = { downloadMode: 'browser' };
@@ -147,7 +147,34 @@ sandbox.GM_download = args => {
   sandbox.GM_info.downloadMode = 'native';
   await assert.rejects(() => saveMessage(msgVideo), /Browser API/);
   sandbox.GM_info.downloadMode = 'browser';
-  console.log('OK: GM_download Blob into per-profile directory, renamed files, error/memory protection.');
+
+  // Emoji-only chat titles: real emoji, flags, keycaps, Telegram custom emoji
+  // rendered without DOM text. The peer ID makes the folder deterministic.
+  browser.appImManager = {chat: {peerId:'-100123'}};
+  const previousSelector = sandbox.document.querySelector;
+  for (const label of ['🔥😈', '🇫🇷', '1️⃣', '❤️']) {
+    assert.equal(containsReadableProfileText(label), false, label);
+    sandbox.document.querySelector = () => ({textContent:label});
+    assert.equal(currentChatLabel(), 'Profil_-100123', label);
+    assert.equal(fileName(msgVideo, getMediaInfo(msgVideo)),
+      'Profil_-100123 - 2026-10-12_10-21-04 - x.mp4');
+    await saveMessage(msgVideo);
+    assert.equal(completed.at(-1).name,
+      'Profil_-100123/Profil_-100123 - 2026-10-12_10-21-04 - x.mp4');
+  }
+  // Chat titles using image-based custom emojis can have no textContent.
+  sandbox.document.querySelector = () => ({textContent:''});
+  assert.equal(currentChatLabel(), 'Profil_-100123');
+  // Human-readable titles keep the original folder convention.
+  sandbox.document.querySelector = () => ({textContent:'Canal café 🔥'});
+  assert.equal(currentChatLabel(), 'Canal café 🔥');
+  // An emoji-only ORIGINAL filename also gets a safe, stable fallback.
+  assert.equal(fileName({
+    mid:50, date, media:{document:{_: 'document',mime_type:'video/mp4',file_name:'🔥😈.mp4'}}
+  }, getMediaInfo({media:{document:{_: 'document',mime_type:'video/mp4',file_name:'🔥😈.mp4'}}})),
+  'Canal café 🔥 - 2026-10-12_10-21-04 - video_50.mp4');
+  sandbox.document.querySelector = previousSelector;
+  console.log('OK: GM_download and emoji-only chat profile folder fallback.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
 
@@ -201,7 +228,7 @@ vm.runInNewContext(source, {
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
 assert.match(appended.html, /Copier rapport du backup/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.2');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.3');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -233,7 +260,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.2');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.3');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
