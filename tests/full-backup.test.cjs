@@ -14,7 +14,7 @@ code = code.slice(0, p) +
 const events = [];
 const completed = [];
 const items = new Map();
-const title = 'Canal de test';
+let title = 'Canal de test';
 const photo = {mid: 30, date: 1791763200, peerId: '-10042', media: {
   photo: {_: 'photo', id:'p30', sizes:[{_: 'photoSize',type:'x',size:600}]}
 }};
@@ -164,5 +164,27 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat}=window.
   await backupAll();
   assert.equal(getResult().complete,false);
   assert.match(getResult().detail,/Conversation changée/);
-  console.log('OK: paginated history, originals, albums dedup, manifest resume, stall and chat switch.');
+
+  // End-to-end simulated full backup on an emoji-only chat title.
+  // The parser must NOT reject the title or mix it with another profile.
+  chat.peerId='-10042';
+  sandbox.GM_download=normalDownload;
+  storage.clear();
+  title='🔥😈';
+  const previousCount=completed.length;
+  await backupAll();
+  assert.equal(getResult().complete,true);
+  assert.equal(getResult().done,3);
+  assert.equal(getResult().ctx.profile,'Profil_-10042');
+  assert.equal(completed.length,previousCount+3);
+  for (const saved of completed.slice(previousCount)) {
+    assert.match(saved.name,/^Profil_-10042\/Profil_-10042 - /);
+  }
+  // A custom-emoji title can produce an entirely empty DOM text node.
+  title='';
+  storage.clear();
+  await backupAll();
+  assert.equal(getResult().complete,true);
+  assert.equal(getResult().ctx.profile,'Profil_-10042');
+  console.log('OK: complete backup, resume, chat switch, emoji-only and image-only title fallback.');
 })().catch(err=>{console.error(err);process.exitCode=1;});

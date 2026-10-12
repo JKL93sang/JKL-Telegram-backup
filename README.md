@@ -1,6 +1,6 @@
 # JKL Telegram Backup
 
-**Statut : prototype expérimental v0.2.2 — téléchargement non validé sur Telegram Web.**
+**Statut : prototype expérimental v0.2.3 — téléchargement non validé sur Telegram Web.**
 
 Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos Telegram. L'objectif est de retrouver une expérience comparable à JKL Instagram Backup, adaptée à Telegram. Le prototype actuel vise **Telegram WebK uniquement**.
 
@@ -8,7 +8,7 @@ Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos
 
 ## Installer le prototype
 
-[**Installer JKL Telegram Backup v0.2.2 (Tampermonkey)**](https://raw.githubusercontent.com/JKL93sang/JKL-Telegram-backup/main/JKL_Telegram_Backup.user.js)
+[**Installer JKL Telegram Backup v0.2.3 (Tampermonkey)**](https://raw.githubusercontent.com/JKL93sang/JKL-Telegram-backup/main/JKL_Telegram_Backup.user.js)
 
 1. Activer Tampermonkey sur Firefox.
 2. Désactiver temporairement le téléchargeur Telegram tiers pour éviter les interactions entre scripts (sans le supprimer).
@@ -16,9 +16,9 @@ Userscript Tampermonkey pour la sauvegarde et le renommage des photos et vidéos
 4. Ouvrir [Telegram WebK](https://web.telegram.org/k/) et tester avec **une photo et une vidéo non sensibles**, puis une petite sélection.
 5. Noter précisément si le bouton apparaît, l'erreur affichée et si le fichier est réellement sauvegardé.
 
-## Interface et diagnostic v0.2.2
+## Interface et diagnostic v0.2.3
 
-Le petit bouton **« ↓ JKL Telegram Backup v0.2.2 »** est visible en haut, près du centre de la page Telegram. Il ouvre un panneau affichant :
+Le petit bouton **« ↓ JKL Telegram Backup v0.2.3 »** est visible en haut, près du centre de la page Telegram. Il ouvre un panneau affichant :
 - si Telegram WebK (`/k/`) est utilisé ;
 - si le moteur interne Telegram et la lecture des messages sont accessibles ;
 - les actions expérimentales **Télécharger le média survolé** et **Télécharger la sélection** ;
@@ -28,7 +28,7 @@ Si Telegram est ouvert sur `/a/`, le panneau propose un lien vers WebK ; les fon
 
 **Important :** l'interface visible est vérifiée par tests automatisés. Le téléchargement réel et la détection des messages restent non validés sur le navigateur de l'utilisateur.
 
-## Correctifs v0.2.2
+## Correctifs v0.2.3
 
 - **« Média ciblé » s'actualise pendant le survol**, sans refermer le panneau.
 - Dans un album, le script cherche l'identifiant du média survolé (si le DOM Telegram l'expose).
@@ -38,7 +38,26 @@ Si Telegram est ouvert sur `/a/`, le panneau propose un lien vers WebK ; les fon
 
 Les fonctions internes de téléchargement restent expérimentales, y compris le ciblage réel d'un album : cette version n'est pas encore une sauvegarde intégrale validée.
 
-## Autorisation des extensions vidéo — v0.2.2
+## Profils dont le nom contient uniquement des émojis — v0.2.3
+
+Telegram WebK peut afficher le titre d'un canal ou profil exclusivement en émojis, parfois comme des images de custom emojis ne laissant **aucun texte lisible dans le DOM**. Dans les anciennes versions, le script retombait sur `Telegram` et refusait le backup complet, pour éviter que tous ces profils soient mélangés dans un seul dossier.
+
+**Correctif :** si le titre ne contient pas de lettre ou chiffre lisible après retrait des séquences d'émojis (y compris drapeaux et chiffres en touches), ou si le titre n'est pas présent comme texte, le script utilise le **peer ID** du profil pour créer un nom de répertoire unique, par exemple :
+
+```text
+Téléchargements/
+└── Profil_-3986240785/
+    ├── Profil_-3986240785 - 2026-10-12_01-43-00 - photo_132.jpg
+    └── Profil_-3986240785 - 2026-10-12_01-43-05 - video_originale.mp4
+```
+
+Les noms ordinaires avec des lettres, chiffres, accents et éventuellement des émojis restent inchangés. Le format SOLO, le nom des fichiers, la pagination, le manifeste anti-doublons, le bouton Arrêter et la logique des téléchargements sont conservés. Aucun mélange entre deux titres « 🔥😈 » identiques : l'identifiant interne Telegram est distinct.
+
+Les noms d'origine de fichiers composés exclusivement d'émojis reçoivent un repli stable `video_<ID>.mp4` ou `photo_<ID>.ext` afin de réduire le risque de refus du chemin par le navigateur.
+
+**Validation :** tests automatisés sur titres émojis, drapeaux, touches numérotées, titres sans texte et backup complet simulé. Un test sur un vrai canal émojis dans Firefox est nécessaire pour confirmer le résultat final.
+
+## Autorisation des extensions vidéo — v0.2.3
 
 Lors du premier test réel du backup complet sur Telegram WebK, les 21 premiers médias ont été enregistrés et **4 vidéos ont échoué avec `not_whitelisted`**. Ce code est renvoyé par Tampermonkey lorsque l'extension de sortie n'est **pas autorisée** dans sa liste blanche, même si son mode de téléchargement est déjà « Browser API ». Les quatre fichiers concernés faisaient moins de 10 Mio : ils n'étaient pas bloqués par notre limite de 512 Mio.
 
@@ -48,7 +67,7 @@ Cette version rend l'erreur **actionnable** : elle identifie automatiquement le 
 
 Référence : [FAQ officielle Tampermonkey, téléchargement de fichiers (Q302)](https://www.tampermonkey.net/faq.php?ext=fire&q=Q302).
 
-## Diagnostic détaillé des échecs — v0.2.2
+## Diagnostic détaillé des échecs — v0.2.3
 
 Après un backup avec des erreurs, le panneau indique **pour chaque fichier en échec** : identifiant du message Telegram, type de média, taille déclarée et **raison exacte** (erreur de téléchargement, taille incohérente, limite de 512 Mio, etc.).
 
@@ -58,7 +77,7 @@ Cliquer sur **« Copier rapport du backup »** pour recopier le rapport complet.
 
 Le nombre de détails conservés par exécution est plafonné à 100 (le compteur total reste exact) pour éviter de saturer le panneau.
 
-## Backup complet de l'historique accessible — v0.2.2
+## Backup complet de l'historique accessible — v0.2.3
 
 **Action :** ouvrir le canal, le groupe ou la conversation dans [Telegram WebK](https://web.telegram.org/k/) puis cliquer sur **« Tout récupérer »** dans le panneau JKL. Le bouton **« Arrêter »** demande l'arrêt après l'opération en cours.
 
@@ -78,9 +97,9 @@ Les médias sont enregistrés **un par un** sous `Téléchargements/NomDuProfil/
 - Limite de sécurité inchangée : **512 Mio par média** (téléchargement en mémoire).
 - Si la pagination ne progresse plus, si l'API d'historique est inaccessible ou si des fichiers échouent, le résultat indique **« Incomplet »**. Il n'annonce jamais « tout téléchargé » sans avoir atteint `isEnd.top` sur les deux recherches, et sans échec.
 
-**Limites :** le backup porte sur l'historique multimédia **accessible au compte connecté**. Contenus supprimés/non accessibles, stories, messages éphémères et autres sections de Telegram ne sont pas inclus. La version 0.2.2 dépend des méthodes internes de WebK, susceptibles de changer. Pour les très gros canaux, les requêtes et téléchargements peuvent être longs, et le manifeste local du navigateur peut atteindre sa limite de stockage. Les tests GitHub vérifient la logique simulée, pas l'exhaustivité réelle d'un gros canal. Un test sur quelques médias puis un petit canal entier est recommandé avant de l'utiliser à grande échelle.
+**Limites :** le backup porte sur l'historique multimédia **accessible au compte connecté**. Contenus supprimés/non accessibles, stories, messages éphémères et autres sections de Telegram ne sont pas inclus. La version 0.2.3 dépend des méthodes internes de WebK, susceptibles de changer. Pour les très gros canaux, les requêtes et téléchargements peuvent être longs, et le manifeste local du navigateur peut atteindre sa limite de stockage. Les tests GitHub vérifient la logique simulée, pas l'exhaustivité réelle d'un gros canal. Un test sur quelques médias puis un petit canal entier est recommandé avant de l'utiliser à grande échelle.
 
-## Dossiers automatiques par profil — v0.2.2
+## Dossiers automatiques par profil — v0.2.3
 
 **Objectif :** tous les médias téléchargés par JKL depuis un profil, canal, groupe ou conversation sont placés dans un dossier au nom de cette conversation, dans le répertoire Téléchargements du navigateur, sans sélection manuelle du dossier à chaque fichier.
 
@@ -103,11 +122,11 @@ Le nom de dossier provient du titre de la conversation Telegram affichée dans W
 
 Le script utilise désormais `GM_download({url: Blob, name: 'Profil/Fichier.ext'})` et ne peut plus se contenter du lien HTML `<a download>` (qui remplace les séparateurs par des caractères ordinaires). Tampermonkey 5.4+ est nécessaire pour le téléchargement de Blob. Suivant les versions et les permissions du navigateur, la création du dossier peut échouer : le script affiche alors une erreur et ne déclenche pas de téléchargement non classé en secours. Les tests automatisés vérifient le chemin demandé à Tampermonkey ; **ils ne prouvent pas la création effective du dossier sur disque**.
 
-## Enregistrement renommé v0.2.2
+## Enregistrement renommé v0.2.3
 
 La précédente implémentation transmettait `fileName` au téléchargement natif de Telegram WebK. **Pour les photos/vidéos, son mode streaming ne respectait pas ce nom** : Firefox enregistrait le nom d'origine.
 
-En v0.2.2, l'action **JKL Backup** obtient le Blob complet via `downloadMedia`, puis utilise **GM_download** avec le chemin relatif `NomDuProfil/NomDuCompte - Date - NomOriginal.ext`. Les tests vérifient le chemin effectivement transmis à Tampermonkey.
+En v0.2.3, l'action **JKL Backup** obtient le Blob complet via `downloadMedia`, puis utilise **GM_download** avec le chemin relatif `NomDuProfil/NomDuCompte - Date - NomOriginal.ext`. Les tests vérifient le chemin effectivement transmis à Tampermonkey.
 
 **Limites de sécurité :**
 - **512 Mio maximum par média renommé** (le Blob doit tenir en mémoire). Au-delà, JKL affiche une erreur **avant** de demander le téléchargement. Il n'enregistre jamais silencieusement le nom original à la place.
@@ -115,7 +134,7 @@ En v0.2.2, l'action **JKL Backup** obtient le Blob complet via `downloadMedia`, 
 - Ne pas déduire d'une exécution CI verte que Firefox a bien écrit un fichier : vérifier une photo et une vidéo sur la vraie session Telegram.
 - Le téléchargement natif Telegram/Firefox conserve son propre comportement.
 
-## Renommage v0.2.2
+## Renommage v0.2.3
 
 L'action **« JKL Backup · Télécharger + renommer »** dans le menu contextuel Telegram, ou le bouton de téléchargement SOLO du panneau JKL, déclenche le téléchargement renommé via le moteur de Telegram WebK.
 
@@ -132,10 +151,10 @@ Le menu contextuel JKL reste expérimental : le test final consiste à constater
 ## Objectifs
 
 - Téléchargement **SOLO** : bouton près de chaque média et depuis la visionneuse.
-- Téléchargement **COMPLET** : pagination de l'historique multimédia accessible d'un canal, groupe ou conversation (v0.2.2, à valider en situation réelle).
+- Téléchargement **COMPLET** : pagination de l'historique multimédia accessible d'un canal, groupe ou conversation (v0.2.3, à valider en situation réelle).
 - Albums et sélections, photos et vidéos en qualité originale lorsqu'elle est disponible.
 - Renommage : `NomDuCompte - AAAA-MM-JJ_HH-mm-ss - NomOriginal.ext` (nom de la conversation/canal visible).
-- File séquentielle, compteurs de progression, reprise et anti-doublons via manifeste local (v0.2.2).
+- File séquentielle, compteurs de progression, reprise et anti-doublons via manifeste local (v0.2.3).
 - Interface discrète, stable et adaptée à Telegram Web.
 - Déploiement via GitHub avec contrôle automatique des nouvelles versions.
 
