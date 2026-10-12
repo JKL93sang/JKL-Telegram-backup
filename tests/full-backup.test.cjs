@@ -8,7 +8,7 @@ let code = fs.readFileSync(__dirname + '/../JKL_Telegram_Backup.user.js', 'utf8'
 assert.ok(code.trimEnd().endsWith('})();'));
 const p = code.lastIndexOf('\n})();');
 code = code.slice(0, p) +
-  '\nwindow.__bulkTests = {backupAll, stopBackup, fetchMediaPage, mediaIdentity, getMediaInfo, getResult:()=>lastBulkResult, reportForOpenChat};' +
+  '\nwindow.__bulkTests = {backupAll, stopBackup, fetchMediaPage, mediaIdentity, getMediaInfo, getResult:()=>lastBulkResult, reportForOpenChat, statusForOpenChat, resetResult:()=>{lastBulkResult=null;}};' +
   code.slice(p);
 
 const events = [];
@@ -88,7 +88,7 @@ const sandbox = {
   clearTimeout
 };
 vm.runInNewContext(code,sandbox,{filename:'JKL_Telegram_Backup.user.js'});
-const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat}=window.__bulkTests;
+const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusForOpenChat,resetResult}=window.__bulkTests;
 (async()=>{
   assert.equal(getMediaInfo(docImage).type,'PHOTO');
   assert.equal(mediaIdentity(video,getMediaInfo(video),{peerId:'-10042'}),'-10042:20:v20');
@@ -100,6 +100,11 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat}=window.
   assert.equal(first.done,3);
   assert.equal(first.skipped,0);
   assert.equal(first.errors,0);
+  assert.equal(statusForOpenChat().kind,'complete');
+  assert.equal(statusForOpenChat().label,'Terminé · 3 médias');
+  assert.match(storage.get('JKL_TG_STATE_V1:-10042:0'), /"kind":"complete"/);
+  resetResult(); // new browser session reading saved state
+  assert.equal(statusForOpenChat().label,'Terminé · 3 médias');
   assert.equal(completed.length,3);
   assert.match(completed[0].name,/Canal de test\/Canal de test - .+ - photo_30\.jpg$/);
   assert.match(completed[1].name,/Canal de test\/Canal de test - .+ - video-source\.mp4$/);
@@ -128,6 +133,8 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat}=window.
   const withErrors=getResult();
   assert.equal(withErrors.errors,1);
   assert.equal(withErrors.complete,false);
+  assert.equal(statusForOpenChat().kind,'warning');
+  assert.equal(statusForOpenChat().label,'À compléter · 1 erreur');
   assert.equal(withErrors.failures.length,1);
   assert.equal(withErrors.failures[0].mid,'20');
   assert.equal(withErrors.failures[0].type,'VIDEO');
@@ -164,6 +171,10 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat}=window.
   await backupAll();
   assert.equal(getResult().complete,false);
   assert.match(getResult().detail,/Conversation changée/);
+  assert.equal(statusForOpenChat().kind,'ready',
+    'switching away from failed chat must not display its status');
+  chat.peerId='-10042';
+  assert.equal(statusForOpenChat().kind,'incomplete');
 
   // End-to-end simulated full backup on an emoji-only chat title.
   // The parser must NOT reject the title or mix it with another profile.
@@ -214,5 +225,12 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat}=window.
   assert.equal(getResult().done,0);
   assert.equal(getResult().skipped,3);
   assert.equal(getResult().ctx.profile,'official_channel');
-  console.log('OK: full backup username-first, stable directory, resume and regressions.');
+
+  // A browser restart during an active download must NEVER claim completion.
+  resetResult();
+  storage.set('JKL_TG_STATE_V1:-10042:0',
+    JSON.stringify({kind:'running',label:'En cours · 2/3'}));
+  assert.equal(statusForOpenChat().kind,'incomplete');
+  assert.equal(statusForOpenChat().label,'Interrompu · relancer');
+  console.log('OK: full backup, persistent completion indicator, failure separation and resume.');
 })().catch(err=>{console.error(err);process.exitCode=1;});
