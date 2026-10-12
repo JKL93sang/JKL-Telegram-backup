@@ -8,7 +8,7 @@ let code = fs.readFileSync(__dirname + '/../JKL_Telegram_Backup.user.js', 'utf8'
 assert.ok(code.trimEnd().endsWith('})();'));
 const p = code.lastIndexOf('\n})();');
 code = code.slice(0, p) +
-  '\nwindow.__bulkTests = {backupAll, stopBackup, fetchMediaPage, mediaIdentity, getMediaInfo, getResult:()=>lastBulkResult, reportForOpenChat, statusForOpenChat, resetResult:()=>{lastBulkResult=null;}};' +
+  '\nwindow.__bulkTests = {backupAll, stopBackup, fetchMediaPage, mediaIdentity, getMediaInfo, getResult:()=>lastBulkResult, reportForOpenChat, statusForOpenChat, resetResult:()=>{lastBulkResult=null;}, indexLocalFolder, findExistingDiskFile, setFolder:f=>{localFolderIndex=f;}, clearFolder:()=>{localFolderIndex=null;} };' +
   code.slice(p);
 
 const events = [];
@@ -88,7 +88,7 @@ const sandbox = {
   clearTimeout
 };
 vm.runInNewContext(code,sandbox,{filename:'JKL_Telegram_Backup.user.js'});
-const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusForOpenChat,resetResult}=window.__bulkTests;
+const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusForOpenChat,resetResult,indexLocalFolder,findExistingDiskFile,setFolder,clearFolder}=window.__bulkTests;
 (async()=>{
   assert.equal(getMediaInfo(docImage).type,'PHOTO');
   assert.equal(mediaIdentity(video,getMediaInfo(video),{peerId:'-10042'}),'-10042:20:v20');
@@ -225,6 +225,104 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusFo
   assert.equal(getResult().done,0);
   assert.equal(getResult().skipped,3);
   assert.equal(getResult().ctx.profile,'official_channel');
+
+
+  // A user-selected local folder (Firefox webkitdirectory) is authoritative.
+  // It can rescue files already on disk despite an erased browser manifest.
+  storage.clear();
+  currentUsername='official_channel';
+  title='Canal de test';
+  const savedSet=completed.slice(beforeUsername,beforeUsername+3);
+  const files=savedSet.map(entry => ({
+    name:entry.name.split('/').at(-1),
+    webkitRelativePath:'official_channel/' + entry.name.split('/').at(-1),
+    size:600
+  }));
+  const folder=indexLocalFolder(files,{peerId:'-10042',profile:'official_channel'});
+  assert.equal(folder.relevant,3);
+  setFolder(folder);
+  const preexisting=completed.length;
+  await backupAll();
+  let diskResult=getResult();
+  assert.equal(diskResult.done,0);
+  assert.equal(diskResult.skipped,3);
+  assert.equal(diskResult.diskFound,3);
+  assert.equal(diskResult.missingFromDisk,0);
+  assert.equal(diskResult.complete,true);
+  assert.equal(completed.length,preexisting);
+  assert.equal(JSON.parse(storage.get('JKL_TG_OK_V1:-10042:0')).length,3,
+    'folder scan must rebuild lost success ledger');
+
+  // The selected folder is authoritative if browser ledger falsely says
+  // a previously downloaded video is still present after manual deletion.
+  const videoName=savedSet.find(x=>x.name.endsWith('video-source.mp4')).name.split('/').at(-1);
+  const missingVideoFiles=files.filter(x=>x.name!==videoName);
+  const reduced=indexLocalFolder(missingVideoFiles,{peerId:'-10042',profile:'official_channel'});
+  setFolder(reduced);
+  const preRecovery=completed.length;
+  await backupAll();
+  diskResult=getResult();
+  assert.equal(diskResult.complete,true);
+  assert.equal(diskResult.done,1);
+  assert.equal(diskResult.skipped,2);
+  assert.equal(diskResult.diskFound,2);
+  assert.equal(diskResult.missingFromDisk,1);
+  assert.equal(completed.length,preRecovery+1);
+  assert.match(completed.at(-1).name,/video-source\.mp4$/);
+  await backupAll();
+  assert.equal(getResult().done,0,
+    'do not redownload a GM_download-confirmed success twice in same session');
+  assert.equal(getResult().skipped,3);
+
+  // Root Downloads folder containing other profiles should match ONLY
+  // the current profile subdirectory (and only exact filenames).
+  const parentFiles=files.map(x=>({
+    ...x,webkitRelativePath:'Downloads/' + x.webkitRelativePath
+  }));
+  parentFiles.push({name:videoName,
+    webkitRelativePath:'Downloads/AutreProfil/' + videoName,size:600});
+  const parent=indexLocalFolder(parentFiles,{peerId:'-10042',profile:'official_channel'});
+  assert.equal(parent.relevant,3);
+  assert.equal(parent.totalFiles,4);
+  assert.equal(findExistingDiskFile(parent, {peerId:'-10042',profile:'official_channel'},
+    videoName,getMediaInfo(video)),true);
+  assert.equal(findExistingDiskFile(parent,{peerId:'-10099',profile:'official_channel'},
+    videoName,getMediaInfo(video)),false);
+  assert.throws(()=>indexLocalFolder(
+    [{name:'different.mp4',size:600,webkitRelativePath:'Other/wrong/different.mp4'}],
+    {peerId:'-10042',profile:'official_channel'}),/ne contient pas le sous-dossier/);
+  assert.throws(()=>indexLocalFolder([],{peerId:'-10042',profile:'official_channel'}),
+    /aucun fichier/);
+
+  // A matching document with a truncated/different byte length must
+  // NOT count as already downloaded. Avoid blindly trusting filenames.
+  const incorrect=files.map(x=>({
+    ...x,size:x.name.endsWith('image originale.png') ? 1 : x.size
+  }));
+  setFolder(indexLocalFolder(incorrect,{peerId:'-10042',profile:'official_channel'}));
+  const beforeMismatch=completed.length;
+  await backupAll();
+  assert.equal(getResult().done,1);
+  assert.equal(getResult().diskFound,2);
+  assert.equal(getResult().missingFromDisk,1);
+  assert.equal(completed.length,beforeMismatch+1);
+  // Two Telegram messages can have the SAME expected filename (same
+  // original name and timestamp), yet only one physical file exists.
+  // Do not count the lone file twice.
+  storage.clear();
+  currentUsername='official_channel';
+  title='Canal de test';
+  pages.inputMessagesFilterPhotoVideo[0]=[video,{...video,mid:21}];
+  pages.inputMessagesFilterPhotoVideo[1]=[photo];
+  setFolder(indexLocalFolder(files,{peerId:'-10042',profile:'official_channel'}));
+  const beforeCollision=completed.length;
+  await backupAll();
+  assert.equal(getResult().found,4);
+  assert.equal(getResult().diskFound,3);
+  assert.equal(getResult().done,1);
+  assert.equal(getResult().skipped,3);
+  assert.equal(completed.length,beforeCollision+1);
+  clearFolder();
 
   // A browser restart during an active download must NEVER claim completion.
   resetResult();
