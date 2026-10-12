@@ -291,8 +291,9 @@ const fakeDocument = {
   querySelectorAll() { return []; }
 };
 const fakeLocation = {hostname: 'web.telegram.org', pathname: '/a/', hash: '#abc', href: 'https://web.telegram.org/a/#abc'};
+const uiWindow = {innerWidth:1440, innerHeight:900, addEventListener() {}};
 vm.runInNewContext(source, {
-  window: {innerWidth:1440, innerHeight:900, addEventListener() {}},
+  window: uiWindow,
   document: fakeDocument,
   localStorage: {getItem(k){return storage.get(k)||null;},setItem(k,v){storage.set(k,v);}},
   location: fakeLocation,
@@ -308,7 +309,7 @@ vm.runInNewContext(source, {
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
 assert.match(appended.html, /Copier rapport du backup/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.4');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.5');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -318,7 +319,36 @@ toggle.listeners.click();
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : OK/);
 assert.equal(widgets.get('#jkl-tg-webk').style.display, 'none');
-console.log('OK: le panneau visible et le diagnostic WebA/WebK sont montés et interactifs.');
+// Completion indicator appears on the collapsed launcher AND within the panel.
+const chip = widgets.get('#jkl-tg-state-chip');
+const panelState = widgets.get('#jkl-tg-final-state');
+assert.equal(chip.textContent, 'Prêt');
+uiWindow.appImManager = {chat:{peerId:'-10042'}};
+storage.set('JKL_TG_STATE_V1:-10042:0',
+  JSON.stringify({kind:'complete',label:'Terminé · 411 médias'}));
+toggle.listeners.click();
+assert.equal(chip.textContent, 'Terminé · 411 médias');
+assert.equal(panelState.textContent, 'Terminé · 411 médias');
+assert.equal(chip.dataset.jklState, 'complete');
+assert.equal(panelState.style.backgroundColor, '#166447');
+uiWindow.appImManager.chat.peerId='-10099';
+toggle.listeners.click();
+assert.equal(chip.textContent, 'Prêt', 'old chat completion must not bleed');
+storage.set('JKL_TG_STATE_V1:-10099:0',
+  JSON.stringify({kind:'warning',label:'À compléter · 4 erreurs'}));
+toggle.listeners.click();
+assert.equal(chip.textContent, 'À compléter · 4 erreurs');
+assert.equal(chip.dataset.jklState, 'warning');
+uiWindow.appImManager.chat.peerId='-10111';
+storage.set('JKL_TG_STATE_V1:-10111:0',
+  JSON.stringify({kind:'running',label:'En cours'}));
+toggle.listeners.click();
+assert.equal(chip.textContent, 'Interrompu · relancer',
+  'a past in-progress state cannot become a false success');
+uiWindow.appImManager.chat.peerId='-10042';
+toggle.listeners.click();
+assert.equal(chip.textContent, 'Terminé · 411 médias');
+console.log('OK: voyants persistants terminé / réserves / interruption et isolation par profil.');
 
 // Hover must update a visible status without toggling the panel.
 const hover = documentEvents.get('mouseover');
@@ -340,7 +370,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.4');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.5');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
