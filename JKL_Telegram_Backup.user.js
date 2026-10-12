@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.2.2
+// @version      0.2.3
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -19,7 +19,7 @@
 // ==/UserScript==
 
 /*
- * v0.2.2 - WebK only, no external services.
+ * v0.2.3 - WebK only, no external services.
  * SOLO / selection: fetch original media Blob, GM_download into profile folder.
  * ALL: paginate the accessible history with Telegram's getHistory media filters.
  * Sequential queue, explicit stop, progress, persistent success ledger/resume.
@@ -112,7 +112,25 @@
     return { media: doc, type: isGif ? 'GIF' : isImage ? 'PHOTO' : 'VIDEO', ext, originalName: orig || null };
   }
 
-  function currentChatLabel() {
+  // Telegram WebK may render a chat title made solely of custom emojis as
+  // image elements, leaving textContent empty. Emoji-only names can also
+  // produce a fragile path for filesystem downloads.
+  function containsReadableProfileText(value) {
+    const remainder = String(value ?? '').normalize('NFKC')
+      .replace(/[0-9#*]\uFE0F?\u20E3/gu, '') // keycap emojis
+      .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}]/gu, '')
+      .replace(/[\u200D\uFE0E\uFE0F\u20E3\u{E0020}-\u{E007F}]/gu, '');
+    return /[\p{L}\p{N}]/u.test(remainder);
+  }
+
+  function safeProfileFallback(peerId) {
+    const id = peerId ?? page.appImManager?.chat?.peerId;
+    if (id == null || id === '') return 'Telegram';
+    const safeId = String(id).replace(/[^0-9A-Za-z_-]/g, '_').slice(0, 64);
+    return safeId ? 'Profil_' + safeId : 'Telegram';
+  }
+
+  function currentChatLabel(peerId) {
     const selectors = [
       '#column-center .chat-info .peer-title',
       '#column-center .chat-info .title',
@@ -122,12 +140,15 @@
     for (const selector of selectors) {
       const el = document.querySelector(selector);
       const label = el?.textContent?.trim();
-      if (label) return filePart(label, 'Telegram', 70);
+      if (label && containsReadableProfileText(label)) {
+        return filePart(label, safeProfileFallback(peerId), 70);
+      }
     }
-    return 'Telegram';
+    // Never use a shared generic directory for different emoji-only chats.
+    return safeProfileFallback(peerId);
   }
 
-  function fileName(msg, mediaInfo, profile = currentChatLabel()) {
+  function fileName(msg, mediaInfo, profile = currentChatLabel(msg?.peerId)) {
     const mid = msg.mid ?? msg.id;
     if (mid === undefined || mid === null || mid === '') throw new Error('ID de message indisponible.');
     const source = filePart(profile, 'Telegram', 70);
@@ -139,7 +160,11 @@
       const basename = String(mediaInfo.originalName).split(/[\\/]/).pop();
       const recognized = /\.([a-z0-9]{2,6})$/i.exec(basename || '');
       const baseWithoutExt = recognized ? basename.slice(0, -recognized[0].length) : basename;
-      originalBase = filePart(baseWithoutExt, mediaInfo.type.toLowerCase() + '_' + mid, 120);
+      const fallback = mediaInfo.type.toLowerCase() + '_' + mid;
+      // Emoji-only original names may be rejected as paths too.
+      originalBase = containsReadableProfileText(baseWithoutExt)
+        ? filePart(baseWithoutExt, fallback, 120)
+        : fallback;
     } else {
       // Regular Telegram photos do not normally expose their original name.
       originalBase = filePart(mediaInfo.type.toLowerCase() + '_' + mid);
@@ -266,7 +291,7 @@
     if (mode === 'native' || mode === 'disabled') {
       throw new Error('Pour créer les dossiers : Tampermonkey → Téléchargements → Browser API.');
     }
-    const profile = profileOverride || currentChatLabel();
+    const profile = profileOverride || currentChatLabel(peerId ?? msg.peerId);
     const name = fileName(msg, info, profile);
     const path = profileDownloadPath(profile, name);
     const photoSize = info.media._ === 'photo' ? largestPhotoSize(info.media) : null;
@@ -383,9 +408,11 @@
     }
     // A forum thread has its own search context, unlike the channel's main feed.
     const threadId = Number(chat.threadId) || undefined;
-    const profile = currentChatLabel();
+    // A channel with emoji-only/custom-emoji title must not be blocked.
+    // Use its stable peer ID when a readable name is unavailable.
+    const profile = currentChatLabel(peerId);
     if (profile === 'Telegram') {
-      throw new Error('Titre du chat introuvable : le backup complet refuse le dossier générique.');
+      throw new Error('Identifiant du profil indisponible : dossier unique impossible.');
     }
     return { peerId, threadId, profile, manager };
   }
@@ -781,7 +808,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.2.2',
+      'JKL Telegram Backup v0.2.3',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
@@ -869,7 +896,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.2</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.3</small></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);overflow-y:auto;',
@@ -997,8 +1024,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.2.2';
-    console.info(PREFIX, 'Panneau v0.2.2 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.2.3';
+    console.info(PREFIX, 'Panneau v0.2.3 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -1019,7 +1046,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.2.2 pret (WebK).`);
+    console.info(`${PREFIX} v0.2.3 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
