@@ -51,6 +51,7 @@ Exemples : `Téléchargements/mon_canal/mon_canal - 2026-10-12_10-21-04 - source
 ### Ne pas disperser les sauvegardes déjà commencées
 
 - Une fois un nom de dossier décidé, il est conservé en localStorage sous la clé `JKL_TG_FOLDER_V1:<peerId>`. Un changement ultérieur de username ou de nom affiché **ne renomme pas le dossier**.
+- Si un autre profil reçoit ultérieurement un username déjà attribué à un dossier mémorisé, le script ajoute son Peer ID au nouveau dossier (par exemple `ancien_pseudo_-10098765`) pour éviter de mélanger les profils.
 - **Migration depuis v0.2.3 :** lorsqu'un historique local de **téléchargements réussis du backup complet** existe déjà, le script privilégie le nom de dossier hérité (nom affiché ou `Profil_<peerId>`) avant d'activer cette nouvelle priorité. Cela évite d'envoyer la suite du backup dans un autre dossier par défaut.
 - Le navigateur **ne peut pas examiner, déplacer ou renommer les dossiers déjà présents sur disque** sans une permission de système de fichiers dédiée. Si le profil a été téléchargé uniquement en SOLO avant cette version, ou si son nom a changé depuis le dernier backup, le script ne peut pas déduire automatiquement son ancien répertoire. Il faut donc vérifier le dossier proposé au premier nouveau téléchargement. Il n'y a aucune migration physique.
 - Le registre de dossiers n'est **pas** une preuve que les fichiers existent encore sur disque. Supprimer le dossier Téléchargements à la main n'efface pas la liste de succès dans le navigateur.
