@@ -1269,6 +1269,7 @@
     const folderButton = root.querySelector('#jkl-tg-folder');
     const folderInput = root.querySelector('#jkl-tg-folder-input');
     const folderStatus = root.querySelector('#jkl-tg-folder-status');
+    let pickerTarget = null;
     const chip = root.querySelector('#jkl-tg-state-chip');
     const panelState = root.querySelector('#jkl-tg-final-state');
     const colors = {
@@ -1303,10 +1304,11 @@
       bulkProgress.style.display = active ? 'block' : 'none';
       if (active) bulkProgress.removeAttribute('value');
       const reportCtx = currentReportContext();
-      folderStatus.textContent = reportCtx
-        ? folderSelectionStatus({...reportCtx,
-            profile:localFolderIndex?.profile || ''})
-        : 'Dossier local : ouvre une conversation.';
+      const selected = reportCtx && sameBackupChat(localFolderIndex?.ctx, reportCtx)
+        ? localFolderIndex : null;
+      folderStatus.textContent = selected
+        ? folderSelectionStatus({...reportCtx, profile:selected.profile})
+        : 'Dossier local : non sélectionné (reprise par historique uniquement).';
       refreshBackupIndicator();
     };
 
@@ -1358,15 +1360,27 @@
       if (page.appImManager?.chat?.peerId == null) {
         return toast('Ouvre une conversation Telegram avant de choisir le dossier.', true);
       }
+      // Capture the original chat before the native picker is opened.
+      // File selection can take minutes; user may navigate meanwhile.
+      pickerTarget = currentReportContext();
       // Keep file-dialog activation synchronous with the user click.
       folderInput.click();
     });
     folderInput.addEventListener('change', async () => {
       const files = folderInput.files;
-      if (!files?.length) return;
+      if (!files?.length) {
+        pickerTarget = null;
+        return;
+      }
       try {
         if (running || bulkJob) throw new Error('Un backup est en cours.');
+        if (!pickerTarget || !sameBackupChat(pickerTarget, currentReportContext())) {
+          throw new Error('Conversation changée pendant le choix du dossier.');
+        }
         const ctx = await bulkContext();
+        if (!sameBackupChat(ctx, pickerTarget)) {
+          throw new Error('Conversation changée pendant la lecture du dossier.');
+        }
         const folder = indexLocalFolder(files, ctx);
         assertCurrentChat(ctx);
         localFolderIndex = folder;
@@ -1374,6 +1388,7 @@
       } catch (error) {
         toast('Dossier non utilisé : ' + (error?.message || error), true);
       } finally {
+        pickerTarget = null;
         folderInput.value = '';
         renderBulkProgress?.(bulkJob || lastBulkResult);
       }
