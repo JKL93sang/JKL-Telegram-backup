@@ -9,7 +9,7 @@ const suffix = '\n})();';
 assert.ok(source.trimEnd().endsWith('})();'));
 const index = source.lastIndexOf(suffix);
 assert.ok(index > 0);
-source = source.slice(0, index) + '\nwindow.__testing = {sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile, currentChatLabel, containsReadableProfileText};' + source.slice(index);
+source = source.slice(0, index) + '\nwindow.__testing = {sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile, currentChatLabel, containsReadableProfileText, readPeerUsername, resolveProfileFolder, knownProfileFolder};' + source.slice(index);
 
 const requests = [];
 const browser = {
@@ -26,6 +26,10 @@ const sandbox = {
     querySelector() { return null; },
     querySelectorAll() { return []; }
   },
+  localStorage: (() => {
+    const data = new Map();
+    return {data, getItem(k) {return data.get(k) ?? null;}, setItem(k,v) {data.set(k,String(v));}, removeItem(k) {data.delete(k);}};
+  })(),
   MutationObserver: class { observe() {} },
   console,
   setTimeout: (fn, ms) => ms > 10000 ? 0 : setTimeout(fn, ms),
@@ -35,7 +39,8 @@ const sandbox = {
   Promise
 };
 vm.runInNewContext(source, sandbox, { filename: filepath });
-const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile, currentChatLabel, containsReadableProfileText } = browser.__testing;
+const { sanitize, dateStamp, getMediaInfo, fileName, saveMessage, profileDownloadPath, downloadBlobIntoProfile, currentChatLabel, containsReadableProfileText, readPeerUsername, resolveProfileFolder, knownProfileFolder } = browser.__testing;
+const folderStore = sandbox.localStorage.data;
 
 const completed = [];
 sandbox.GM_info = { downloadMode: 'browser' };
@@ -81,6 +86,9 @@ sandbox.GM_download = args => {
   assert.equal(completed.length, 2);
   assert.equal((await saveMessage({mid:1,media:{document:pdf}})).skipped, true);
   assert.equal(requests.length, 2);
+
+  // Simulate a fresh profile without prior v0.2.4 directory selection.
+  folderStore.clear();
 
   // Original document names must be respected, sanitized and safely suffixed.
   sandbox.document.querySelector = selector =>
@@ -148,6 +156,7 @@ sandbox.GM_download = args => {
   await assert.rejects(() => saveMessage(msgVideo), /Browser API/);
   sandbox.GM_info.downloadMode = 'browser';
 
+  folderStore.clear();
   // Emoji-only chat titles: real emoji, flags, keycaps, Telegram custom emoji
   // rendered without DOM text. The peer ID makes the folder deterministic.
   sandbox.GM_download = args => { completed.push(args); args.onload(); };
@@ -175,7 +184,53 @@ sandbox.GM_download = args => {
   }, getMediaInfo({media:{document:{_: 'document',mime_type:'video/mp4',file_name:'🔥😈.mp4'}}})),
   'Canal café 🔥 - 2026-10-12_10-21-04 - video_50.mp4');
   sandbox.document.querySelector = previousSelector;
-  console.log('OK: GM_download and emoji-only chat profile folder fallback.');
+
+  // USERNAME precedence from Telegram WebK appPeersManager, never title DOM.
+  let username = 'real_username';
+  browser.appImManager.chat.managers = {appPeersManager: {
+    getPeerUsername(id) {
+      assert.equal(String(id), String(browser.appImManager.chat.peerId));
+      return username;
+    }
+  }};
+  folderStore.clear();
+  sandbox.document.querySelector = () => ({textContent:'🔥😈'});
+  assert.equal(await readPeerUsername('-100123'), 'real_username');
+  assert.equal(await resolveProfileFolder('-100123'), 'real_username');
+  assert.equal(knownProfileFolder('-100123'), 'real_username');
+  await saveMessage(msgVideo);
+  assert.equal(completed.at(-1).name,
+    'real_username/real_username - 2026-10-12_10-21-04 - x.mp4');
+
+  // Sticky mapping survives changed public username and displayed title.
+  username = 'changed_username';
+  sandbox.document.querySelector = () => ({textContent:'Nouveau titre'});
+  assert.equal(await resolveProfileFolder('-100123'), 'real_username');
+  await saveMessage(msgVideo);
+  assert.match(completed.at(-1).name, /^real_username\/real_username - /);
+
+  // For an unseen user without username, use a readable title.
+  folderStore.clear();
+  username = '';
+  assert.equal(await resolveProfileFolder('-100123'), 'Nouveau titre');
+  folderStore.clear();
+  sandbox.document.querySelector = () => ({textContent:'🔥😈'});
+  assert.equal(await resolveProfileFolder('-100123'), 'Profil_-100123');
+
+  // Protect the user's pre-existing v0.2.3 archive: success ledger implies
+  // the folder still follows the legacy displayed title, not a new username.
+  folderStore.clear();
+  username = 'some_public_username';
+  sandbox.document.querySelector = () => ({textContent:'Ancien dossier'});
+  folderStore.set('JKL_TG_OK_V1:-100123:0', JSON.stringify(['-100123:26:doc']));
+  assert.equal(await resolveProfileFolder('-100123'), 'Ancien dossier');
+  assert.equal(folderStore.get('JKL_TG_FOLDER_V1:-100123'), 'Ancien dossier');
+  folderStore.delete('JKL_TG_OK_V1:-100123:0');
+  username = 'brand_new_username';
+  assert.equal(await resolveProfileFolder('-100123'), 'Ancien dossier');
+
+  sandbox.document.querySelector = previousSelector;
+  console.log('OK: username-first, stable per-peer folders, emoji fallback and legacy archive pinning.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
 
@@ -229,7 +284,7 @@ vm.runInNewContext(source, {
 assert.equal(appended?.id, 'jkl-tg-dock');
 assert.match(appended.html, /Télécharger le média survolé/);
 assert.match(appended.html, /Copier rapport du backup/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.3');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.4');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -261,7 +316,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.3');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.4');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');
