@@ -193,7 +193,12 @@
     // a Telegram URL or extract a username from a message sender.
     let username;
     try {
-      username = await getUsername.call(managers.appPeersManager, peerId);
+      // Hovered message DOM data-peer-id is a string; WebK managers expect
+      // their native PeerId (number with WebK prototype helpers). If this
+      // media belongs to the open chat, always use the actual chat PeerId.
+      const nativePeerId = chat?.peerId != null &&
+        String(chat.peerId) === String(peerId) ? chat.peerId : peerId;
+      username = await getUsername.call(managers.appPeersManager, nativePeerId);
     } catch (err) {
       console.warn(PREFIX, 'Pseudo Telegram indisponible, nom affiché utilisé', err);
       return '';
