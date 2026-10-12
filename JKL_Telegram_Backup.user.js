@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.2.4
+// @version      0.2.5
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -19,7 +19,7 @@
 // ==/UserScript==
 
 /*
- * v0.2.4 - WebK only, no external services.
+ * v0.2.5 - WebK only, no external services.
  * SOLO / selection: fetch original media Blob, GM_download into profile folder.
  * ALL: paginate the accessible history with Telegram's getHistory media filters.
  * Sequential queue, explicit stop, progress, persistent success ledger/resume.
@@ -654,6 +654,71 @@
     } catch { return ''; }
   }
 
+
+  // A small, explicit per-conversation state for the always-visible launcher.
+  // Unlike the successful-file ledger, this reflects the result of a *scan*.
+  function statusKey(ctx) {
+    return 'JKL_TG_STATE_V1:' + String(ctx.peerId) + ':' +
+      String(ctx.threadId || 0);
+  }
+
+  function sameBackupChat(ctx, other) {
+    return !!ctx && !!other &&
+      String(ctx.peerId) === String(other.peerId) &&
+      Number(ctx.threadId || 0) === Number(other.threadId || 0);
+  }
+
+  function statusFromJob(job, active = false) {
+    if (active) {
+      if (job.cancelled) return {kind:'stopping', label:'Arrêt demandé…'};
+      return {kind:'running',
+        label:'En cours · ' + (job.done + job.skipped) + '/' + job.found};
+    }
+    if (job.complete) {
+      return {kind:'complete', label:'Terminé · ' + job.found +
+        ' média' + (job.found === 1 ? '' : 's')};
+    }
+    if (job.cancelled) return {kind:'stopped', label:'Arrêté · reprise possible'};
+    if (job.errors) return {kind:'warning',
+      label:'À compléter · ' + job.errors +
+        ' erreur' + (job.errors === 1 ? '' : 's')};
+    return {kind:'incomplete', label:'Incomplet · voir rapport'};
+  }
+
+  function persistBackupState(job, active = false) {
+    try {
+      localStorage.setItem(statusKey(job.ctx),
+        JSON.stringify(statusFromJob(job, active)));
+    } catch (error) {
+      console.warn(PREFIX, 'État visuel du backup non enregistré', error);
+    }
+  }
+
+  function statusForOpenChat() {
+    const ctx = currentReportContext();
+    if (!ctx) return {kind:'ready', label:'Prêt'};
+    if (sameBackupChat(bulkJob?.ctx, ctx)) {
+      return statusFromJob(bulkJob, true);
+    }
+    if (sameBackupChat(lastBulkResult?.ctx, ctx)) {
+      return statusFromJob(lastBulkResult);
+    }
+    try {
+      const saved = JSON.parse(localStorage.getItem(statusKey(ctx)) || 'null');
+      if (saved && typeof saved.label === 'string' &&
+          ['complete', 'warning', 'stopped', 'incomplete'].includes(saved.kind)) {
+        return {kind:saved.kind, label:saved.label.slice(0, 100)};
+      }
+      // A refresh or browser crash in the middle of a run is NOT a success.
+      if (saved?.kind === 'running' || saved?.kind === 'stopping') {
+        return {kind:'incomplete', label:'Interrompu · relancer'};
+      }
+    } catch (error) {
+      console.warn(PREFIX, 'Dernier état visuel invalide', error);
+    }
+    return {kind:'ready', label:'Prêt'};
+  }
+
   function bulkText(job) {
     return [
       job.stage,
@@ -698,6 +763,7 @@
       failures: []
     };
     running = true;
+    persistBackupState(job, true);
     bulkStatus(job);
     try {
       // Two searches are intentional: PhotoVideo for media and Document for
@@ -803,6 +869,7 @@
     } finally {
       lastBulkResult = job;
       saveLastReport(job);
+      persistBackupState(job);
       bulkStatus(job);
       running = false;
       bulkJob = null;
@@ -876,6 +943,7 @@
   // until a particular right-click menu or selection UI was opened.
   let lastHoveredRef = null;
   let refreshDock = null;
+  let refreshBackupIndicator = null;
 
   function isWebK() {
     return location.hostname === 'webk.telegram.org' ||
@@ -919,7 +987,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.2.4',
+      'JKL Telegram Backup v0.2.5',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
@@ -1007,13 +1075,20 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.4</small></button>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.5</small>',
+      '<span id="jkl-tg-state-chip" style="display:inline-block;margin-left:8px;',
+      'padding:3px 7px;border:1px solid #617d8d;border-radius:14px;',
+      'font:600 11px system-ui,sans-serif;vertical-align:middle">',
+      'Prêt</span></button>',
       '<section id="jkl-tg-panel" hidden style="box-sizing:border-box;position:absolute;',
       'left:0;top:42px;transform:none;width:316px;',
       'max-width:calc(100vw - 24px);max-height:calc(100vh - 120px);overflow-y:auto;',
       'padding:12px;border-radius:13px;',
       'background:#142b39;border:1px solid #557083;line-height:1.45">',
       '<strong>JKL Telegram Backup</strong>',
+      '<div id="jkl-tg-final-state" role="status" aria-live="polite"',
+      ' style="margin-top:8px;padding:8px 10px;border-radius:8px;',
+      'font-weight:700;border:1px solid #617d8d">Prêt</div>',
       '<div id="jkl-tg-status" style="white-space:pre-line;margin:8px 0 11px;',
       'font-size:12px;color:#b6d4df"></div>',
       '<button id="jkl-tg-solo" type="button" style="cursor:pointer;padding:8px;',
@@ -1058,14 +1133,39 @@
     const stopButton = root.querySelector('#jkl-tg-stop');
     const bulkLabel = root.querySelector('#jkl-tg-bulk-status');
     const bulkProgress = root.querySelector('#jkl-tg-bulk-progress');
+    const chip = root.querySelector('#jkl-tg-state-chip');
+    const panelState = root.querySelector('#jkl-tg-final-state');
+    const colors = {
+      ready: {background:'#314551', color:'#e1ebf3', border:'#60798a'},
+      running: {background:'#19547a', color:'#f1fbff', border:'#3a9bca'},
+      stopping: {background:'#80552b', color:'#fff2d8', border:'#d99c4c'},
+      complete: {background:'#166447', color:'#f0fff7', border:'#31bf85'},
+      warning: {background:'#785024', color:'#fff4dc', border:'#dea452'},
+      stopped: {background:'#785024', color:'#fff4dc', border:'#dea452'},
+      incomplete: {background:'#873538', color:'#fff1f1', border:'#e77878'}
+    };
+    refreshBackupIndicator = () => {
+      const state = statusForOpenChat();
+      const palette = colors[state.kind] || colors.ready;
+      for (const el of [chip, panelState]) {
+        if (el.textContent !== state.label) el.textContent = state.label;
+        if (el.dataset.jklState === state.kind) continue;
+        el.dataset.jklState = state.kind;
+        el.style.backgroundColor = palette.background;
+        el.style.color = palette.color;
+        el.style.borderColor = palette.border;
+      }
+    };
+    const visibleJob = job => sameBackupChat(job?.ctx, currentReportContext());
     renderBulkProgress = job => {
       const active = Boolean(bulkJob);
       allButton.disabled = active;
       stopButton.disabled = !active || bulkJob?.cancelled;
-      bulkLabel.textContent = job ? bulkText(job) :
+      bulkLabel.textContent = visibleJob(job) ? bulkText(job) :
         (reportForOpenChat() || 'Prêt : ouvre un canal puis clique sur Tout récupérer.');
       bulkProgress.style.display = active ? 'block' : 'none';
       if (active) bulkProgress.removeAttribute('value');
+      refreshBackupIndicator();
     };
 
     const refresh = () => {
@@ -1095,7 +1195,7 @@
       panel.style.display = panel.hidden ? 'none' : 'block';
       toggle.setAttribute('aria-expanded', String(!panel.hidden));
       refresh();
-      if (!bulkJob) renderBulkProgress(null);
+      renderBulkProgress(bulkJob);
     });
     panel.style.display = 'none';
     root.querySelector('#jkl-tg-solo').addEventListener('click', async () => {
@@ -1114,6 +1214,9 @@
     allButton.addEventListener('click', () => { void backupAll(); });
     stopButton.addEventListener('click', stopBackup);
     renderBulkProgress(lastBulkResult);
+    window.addEventListener?.('hashchange', () => {
+      renderBulkProgress(bulkJob);
+    });
     root.querySelector('#jkl-tg-copy-errors').addEventListener('click', async () => {
       const report = reportForOpenChat();
       if (!report) return toast('Aucun rapport pour cette conversation.', true);
@@ -1135,8 +1238,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.2.4';
-    console.info(PREFIX, 'Panneau v0.2.4 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.2.5';
+    console.info(PREFIX, 'Panneau v0.2.5 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -1150,14 +1253,23 @@
     node.querySelectorAll('.selection-wrapper').forEach(addSelectionAction);
   }
 
+  let lastObservedChat = null;
   const observer = new MutationObserver(records => {
     for (const record of records) for (const node of record.addedNodes) process(node);
+    const ctx = currentReportContext();
+    const key = ctx ? statusKey(ctx) : '';
+    if (key !== lastObservedChat) {
+      lastObservedChat = key;
+      refreshBackupIndicator?.();
+      // The diagnostic report also belongs to the currently open chat.
+      if (!bulkJob) renderBulkProgress?.(null);
+    }
   });
   const start = () => {
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.2.4 pret (WebK).`);
+    console.info(`${PREFIX} v0.2.5 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
