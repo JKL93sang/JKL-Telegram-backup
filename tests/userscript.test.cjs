@@ -28,7 +28,7 @@ const sandbox = {
   },
   localStorage: (() => {
     const data = new Map();
-    return {data, getItem(k) {return data.get(k) ?? null;}, setItem(k,v) {data.set(k,String(v));}, removeItem(k) {data.delete(k);}};
+    return {data, get length() {return data.size;}, key(i) {return [...data.keys()][i] ?? null;}, getItem(k) {return data.get(k) ?? null;}, setItem(k,v) {data.set(k,String(v));}, removeItem(k) {data.delete(k);}};
   })(),
   MutationObserver: class { observe() {} },
   console,
@@ -228,6 +228,19 @@ sandbox.GM_download = args => {
   folderStore.delete('JKL_TG_OK_V1:-100123:0');
   username = 'brand_new_username';
   assert.equal(await resolveProfileFolder('-100123'), 'Ancien dossier');
+
+  // A public username can be reassigned to another peer months later: never
+  // mingle both peers' archives in the same previously pinned folder.
+  folderStore.clear();
+  folderStore.set('JKL_TG_FOLDER_V1:-100123','reassigned_name');
+  browser.appImManager.chat.peerId='-100456';
+  username='reassigned_name';
+  sandbox.document.querySelector = () => ({textContent:'🔥😈'});
+  assert.equal(await resolveProfileFolder('-100456'),'reassigned_name_-100456');
+  assert.equal(knownProfileFolder('-100123'),'reassigned_name');
+  assert.equal(knownProfileFolder('-100456'),'reassigned_name_-100456');
+  username='something_else';
+  assert.equal(await resolveProfileFolder('-100456'),'reassigned_name_-100456');
 
   sandbox.document.querySelector = previousSelector;
   console.log('OK: username-first, stable per-peer folders, emoji fallback and legacy archive pinning.');
