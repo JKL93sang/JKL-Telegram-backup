@@ -118,14 +118,14 @@ sandbox.GM_download = args => {
     _: 'document', mime_type:'video/mp4', size: 700 * 1024 * 1024,
     file_name:'trop-grand.mp4', attributes:[]
   }}};
-  await assert.rejects(() => saveMessage(huge), /512 Mio/);
+  await assert.rejects(() => saveMessage(huge, '-100123'), /512 Mio/);
   assert.equal(requests.length, 2, 'oversized files must be blocked before memory allocation');
   assert.equal(completed.length, 2);
   const badSize = {mid: 44, date, media: {document: {
     _: 'document', mime_type:'video/mp4', size: 999,
     file_name:'incomplet.mp4', attributes:[]
   }}};
-  await assert.rejects(() => saveMessage(badSize), /Taille vidéo incohérente/);
+  await assert.rejects(() => saveMessage(badSize, '-100123'), /Taille vidéo incohérente/);
   assert.equal(completed.length, 2, 'truncated downloads must never be offered to Firefox');
   assert.equal(profileDownloadPath('Canal Démo / Test', 'exemple.mp4'),
     'Canal Démo _ Test/exemple.mp4');
