@@ -306,6 +306,22 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusFo
   assert.equal(getResult().diskFound,2);
   assert.equal(getResult().missingFromDisk,1);
   assert.equal(completed.length,beforeMismatch+1);
+  // Two Telegram messages can have the SAME expected filename (same
+  // original name and timestamp), yet only one physical file exists.
+  // Do not count the lone file twice.
+  storage.clear();
+  currentUsername='official_channel';
+  title='Canal de test';
+  pages.inputMessagesFilterPhotoVideo[0]=[video,{...video,mid:21}];
+  pages.inputMessagesFilterPhotoVideo[1]=[photo];
+  setFolder(indexLocalFolder(files,{peerId:'-10042',profile:'official_channel'}));
+  const beforeCollision=completed.length;
+  await backupAll();
+  assert.equal(getResult().found,4);
+  assert.equal(getResult().diskFound,3);
+  assert.equal(getResult().done,1);
+  assert.equal(getResult().skipped,3);
+  assert.equal(completed.length,beforeCollision+1);
   clearFolder();
 
   // A browser restart during an active download must NEVER claim completion.
