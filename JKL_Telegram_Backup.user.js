@@ -202,6 +202,23 @@
     return /^[A-Za-z0-9_]{1,64}$/.test(value) ? value : '';
   }
 
+  // Different peers must not reuse a folder already pinned to another peer.
+  // Particularly important if an old @username gets reassigned.
+  function folderClaimedByAnotherPeer(folder, peerId) {
+    const count = Number(localStorage.length) || 0;
+    for (let i = 0; i < count; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(FOLDER_KEY_PREFIX) || key === profileFolderKey(peerId)) {
+        continue;
+      }
+      const other = localStorage.getItem(key);
+      if (typeof other === 'string' && other.toLowerCase() === folder.toLowerCase()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async function resolveProfileFolder(peerId, threadId) {
     const currentPeerId = peerId ?? page.appImManager?.chat?.peerId;
     if (currentPeerId === undefined || currentPeerId === null || currentPeerId === '') {
@@ -219,11 +236,21 @@
     const candidate = legacy
       ? currentChatLabel(currentPeerId)
       : username || currentChatLabel(currentPeerId);
-    const name = filePart(candidate, safeProfileFallback(currentPeerId), 70);
+    let name = filePart(candidate, safeProfileFallback(currentPeerId), 70);
     if (name === 'Telegram') {
       throw new Error('Dossier de profil non déterminé : nom et identifiant indisponibles.');
     }
 
+    // Never merge two identities just because one username is reassigned or
+    // two private chats share a display title. Preserve the first owner's folder.
+    if (folderClaimedByAnotherPeer(name, currentPeerId)) {
+      const suffix = '_' + String(currentPeerId).replace(/[^0-9A-Za-z_-]/g, '_');
+      const prefix = name.slice(0, Math.max(1, 70 - suffix.length));
+      name = filePart(prefix + suffix, safeProfileFallback(currentPeerId), 70);
+      if (folderClaimedByAnotherPeer(name, currentPeerId)) {
+        throw new Error('Collision de dossiers Telegram : sauvegarde interrompue.');
+      }
+    }
     // The registry cannot be used to infer/rename an existing filesystem
     // folder. A write failure must be explicit, not silently split archives.
     localStorage.setItem(profileFolderKey(currentPeerId), name);
