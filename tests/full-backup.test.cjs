@@ -186,5 +186,33 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat}=window.
   await backupAll();
   assert.equal(getResult().complete,true);
   assert.equal(getResult().ctx.profile,'Profil_-10042');
-  console.log('OK: complete backup, resume, chat switch, emoji-only and image-only title fallback.');
+
+  // Full backup on a new peer: username must win over a readable channel title.
+  // The choice is then pinned, even when the public @username changes.
+  chat.peerId='-10042';
+  title='Canal de test';
+  let currentUsername='official_channel';
+  chat.managers.appPeersManager={
+    getPeerUsername(peer) {
+      assert.equal(String(peer), '-10042');
+      return currentUsername;
+    }
+  };
+  storage.clear();
+  const beforeUsername=completed.length;
+  await backupAll();
+  assert.equal(getResult().complete,true);
+  assert.equal(getResult().ctx.profile,'official_channel');
+  assert.equal(getResult().done,3);
+  assert.ok(completed.slice(beforeUsername).every(x=>
+    x.name.startsWith('official_channel/official_channel - ')));
+  assert.equal(storage.get('JKL_TG_FOLDER_V1:-10042'),'official_channel');
+  currentUsername='renamed_channel';
+  title='Nouveau titre';
+  await backupAll();
+  assert.equal(getResult().complete,true);
+  assert.equal(getResult().done,0);
+  assert.equal(getResult().skipped,3);
+  assert.equal(getResult().ctx.profile,'official_channel');
+  console.log('OK: full backup username-first, stable directory, resume and regressions.');
 })().catch(err=>{console.error(err);process.exitCode=1;});
