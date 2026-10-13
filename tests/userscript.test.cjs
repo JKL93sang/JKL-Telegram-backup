@@ -15,7 +15,7 @@ const requests = [];
 const browser = {
   appDownloadManager: { downloadMedia: async options => {
     requests.push(options);
-    return {size: 600, slice() {return this;}};
+    return {size: options.media.file_name === 'incomplet.mp4' ? 600 : (options.media.size || 600), slice() {return this;}};
   } }
 };
 const sandbox = {
@@ -114,19 +114,48 @@ sandbox.GM_download = args => {
   }};
   assert.equal(fileName(deceptive, getMediaInfo(deceptive)),
     'Canal Démo _ Test - 2026-10-12_10-21-04 - video.mp4');
-  const huge = {mid: 99, date, media: {document: {
-    _: 'document', mime_type:'video/mp4', size: 700 * 1024 * 1024,
-    file_name:'trop-grand.mp4', attributes:[]
-  }}};
-  await assert.rejects(() => saveMessage(huge, '-100123'), /512 Mio/);
-  assert.equal(requests.length, 2, 'oversized files must be blocked before memory allocation');
-  assert.equal(completed.length, 2);
+  // Large videos must be passed to Tampermonkey WITH profile directory
+  // instead of being blocked by the old 512 Mio ceiling. These synthetic
+  // blobs allocate no gigabytes: actual Firefox support needs manual testing.
+  for (const [mid, size] of [
+    [99, 700 * 1024 * 1024],
+    [100, 2 * 1024 * 1024 * 1024],
+    [101, 3 * 1024 * 1024 * 1024]
+  ]) {
+    const huge = {mid, date, peerId:'-100123', media:{document:{
+      _: 'document', id:'huge-'+mid, mime_type:'video/mp4',
+      size, file_name:'volume_'+mid+'.mp4', attributes:[]
+    }}};
+    const result = await saveMessage(huge, '-100123');
+    assert.equal(result.size,size);
+    assert.equal(completed.at(-1).url.size,size);
+    assert.equal(completed.at(-1).name,
+      'Canal Démo _ Test/Canal Démo _ Test - 2026-10-12_10-21-04 - volume_'+mid+'.mp4');
+  }
+  assert.equal(requests.length,5);
+  assert.equal(completed.length,5);
+  const largeCount=completed.length;
+  // A failed large transfer cannot be presented as a successful download.
+  browser.appDownloadManager.downloadMedia = async () => {
+    throw new Error('memory allocation failed');
+  };
+  await assert.rejects(() => saveMessage({
+    mid:102,date,peerId:'-100123',
+    media:{document:{_: 'document', size:2*1024*1024*1024,
+      mime_type:'video/mp4', file_name:'interrompu.mp4'}}
+  },'-100123'), err =>
+    /memory allocation failed/.test(err.message) && /mémoire/.test(err.message));
+  assert.equal(completed.length,largeCount);
+  browser.appDownloadManager.downloadMedia = async options => {
+    requests.push(options);
+    return {size:options.media.file_name === 'incomplet.mp4' ? 600 : (options.media.size || 600), slice(){return this;}};
+  };
   const badSize = {mid: 44, date, media: {document: {
     _: 'document', mime_type:'video/mp4', size: 999,
     file_name:'incomplet.mp4', attributes:[]
   }}};
   await assert.rejects(() => saveMessage(badSize, '-100123'), /Taille vidéo incohérente/);
-  assert.equal(completed.length, 2, 'truncated downloads must never be offered to Firefox');
+  assert.equal(completed.length, largeCount, 'truncated downloads must never be offered to Firefox');
   assert.equal(profileDownloadPath('Canal Démo / Test', 'exemple.mp4'),
     'Canal Démo _ Test/exemple.mp4');
   assert.equal(profileDownloadPath('../../Autre', 'photo.jpg'),
@@ -311,7 +340,7 @@ assert.match(appended.html, /Télécharger le média survolé/);
 assert.match(appended.html, /Copier rapport du backup/);
 assert.match(appended.html, /Choisir un dossier existant/);
 assert.match(appended.html, /webkitdirectory directory multiple hidden/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.6');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.7');
 const toggle = widgets.get('#jkl-tg-toggle');
 toggle.listeners.click();
 assert.match(widgets.get('#jkl-tg-status').textContent, /WebK : NON/);
@@ -381,7 +410,7 @@ assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #101/);
 itemMid = '102';
 hover({target});
 assert.match(widgets.get('#jkl-tg-status').textContent, /Média ciblé : #102/);
-assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.6');
+assert.equal(fakeDocument.documentElement.dataset.jklTelegramBackup, '0.2.7');
 
 // Dragging the title moves the whole UI and saves the new location.
 const panel = widgets.get('#jkl-tg-panel');

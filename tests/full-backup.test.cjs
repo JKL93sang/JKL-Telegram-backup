@@ -324,6 +324,55 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusFo
   assert.equal(completed.length,beforeCollision+1);
   clearFolder();
 
+  // An accessible 1.5 GiB video must be attempted, correctly named,
+  // excluded from the success ledger on an error, then resumed later.
+  const BIG_SIZE = 1536 * 1024 * 1024;
+  const bigVideo = {mid:5,date:1791763203,peerId:'-10042',media:{
+    document:{_:'document',id:'large-video-5',size:BIG_SIZE,
+      mime_type:'video/mp4',file_name:'video_1_5_GiB.mp4',
+      attributes:[{_:'documentAttributeFilename',file_name:'video_1_5_GiB.mp4'}]}
+  }};
+  pages.inputMessagesFilterPhotoVideo[0]=[video,bigVideo];
+  pages.inputMessagesFilterPhotoVideo[1]=[photo];
+  storage.clear();
+  const originalMediaDownload=window.appDownloadManager.downloadMedia;
+  window.appDownloadManager.downloadMedia=async opts => {
+    if (opts.media.id === 'large-video-5') {
+      return {size:BIG_SIZE,slice(){return this;}};
+    }
+    return originalMediaDownload(opts);
+  };
+  sandbox.GM_download=args=>{
+    if(args.name.endsWith('video_1_5_GiB.mp4')) {
+      args.onerror({error:'disk_write_failed_test'});
+    } else {
+      normalDownload(args);
+    }
+  };
+  const bigStart=completed.length;
+  await backupAll();
+  assert.equal(getResult().found,4);
+  assert.equal(getResult().errors,1);
+  assert.equal(getResult().complete,false);
+  assert.equal(getResult().failures[0].mid,'5');
+  assert.match(getResult().failures[0].reason,/disk_write_failed_test/);
+  assert.equal(JSON.parse(storage.get('JKL_TG_OK_V1:-10042:0')).length,3,
+    'failed huge video must not enter success ledger');
+  assert.equal(completed.length,bigStart+3);
+
+  sandbox.GM_download=normalDownload;
+  await backupAll();
+  assert.equal(getResult().complete,true);
+  assert.equal(getResult().done,1);
+  assert.equal(getResult().skipped,3);
+  assert.equal(completed.at(-1).url.size,BIG_SIZE);
+  assert.match(completed.at(-1).name,
+    /^official_channel\/official_channel - .+ - video_1_5_GiB\.mp4$/);
+  await backupAll();
+  assert.equal(getResult().done,0);
+  assert.equal(getResult().skipped,4);
+  window.appDownloadManager.downloadMedia=originalMediaDownload;
+
   // A browser restart during an active download must NEVER claim completion.
   resetResult();
   storage.set('JKL_TG_STATE_V1:-10042:0',
