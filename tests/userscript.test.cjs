@@ -15,7 +15,7 @@ const requests = [];
 const browser = {
   appDownloadManager: { downloadMedia: async options => {
     requests.push(options);
-    return {size: options.media.size || 600, slice() {return this;}};
+    return {size: options.media.file_name === 'incomplet.mp4' ? 600 : (options.media.size || 600), slice() {return this;}};
   } }
 };
 const sandbox = {
