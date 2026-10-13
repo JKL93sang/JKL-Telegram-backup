@@ -148,7 +148,7 @@ sandbox.GM_download = args => {
   assert.equal(completed.length,largeCount);
   browser.appDownloadManager.downloadMedia = async options => {
     requests.push(options);
-    return {size:options.media.size || 600, slice(){return this;}};
+    return {size:options.media.file_name === 'incomplet.mp4' ? 600 : (options.media.size || 600), slice(){return this;}};
   };
   const badSize = {mid: 44, date, media: {document: {
     _: 'document', mime_type:'video/mp4', size: 999,
