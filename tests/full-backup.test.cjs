@@ -290,7 +290,7 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusFo
     videoName,getMediaInfo(video)),false);
   assert.throws(()=>indexLocalFolder(
     [{name:'different.mp4',size:600,webkitRelativePath:'Other/wrong/different.mp4'}],
-    {peerId:'-10042',profile:'official_channel'}),/ne contient pas le sous-dossier/);
+    {peerId:'-10042',profile:'official_channel'}),/Aucun fichier de ce profil reconnu/);
   assert.throws(()=>indexLocalFolder([],{peerId:'-10042',profile:'official_channel'}),
     /aucun fichier/);
 
@@ -372,6 +372,70 @@ const {backupAll,getResult,mediaIdentity,getMediaInfo,reportForOpenChat,statusFo
   assert.equal(getResult().done,0);
   assert.equal(getResult().skipped,4);
   window.appDownloadManager.downloadMedia=originalMediaDownload;
+
+  // Real-world case: the user restored a folder made under an old display
+  // name. It contains the SAME media, but the profile prefix has changed.
+  storage.clear();
+  pages.inputMessagesFilterPhotoVideo[0]=[photo,video];
+  pages.inputMessagesFilterPhotoVideo[1]=[photo];
+  currentUsername='official_channel';
+  title='Canal de test';
+  const legacyFiles=files.map(x=>{
+    const newName=x.name.replace(/^official_channel - /,'ancien_nom - ');
+    return {name:newName, size:x.size,
+      webkitRelativePath:'ancien_nom/'+newName};
+  });
+  const legacyFolder=indexLocalFolder(legacyFiles,{
+    peerId:'-10042',profile:'official_channel'
+  });
+  assert.equal(legacyFolder.legacyDirect,true);
+  setFolder(legacyFolder);
+  const beforeLegacy=completed.length;
+  await backupAll();
+  assert.equal(getResult().complete,true);
+  assert.equal(getResult().diskFound,3);
+  assert.equal(getResult().diskPreflightMatched,3);
+  assert.equal(getResult().done,0,'legacy folder names must not trigger duplicate downloads');
+  assert.equal(completed.length,beforeLegacy);
+  assert.equal(JSON.parse(storage.get('JKL_TG_OK_V1:-10042:0')).length,3);
+
+  // Firefox's uniquify naming commonly appends " (1)" before extension.
+  storage.clear();
+  const uniquified=files.map(x=>{
+    const renamed=x.name.replace(/(\.[^.]+)$/, ' (1)$1');
+    return {name:renamed,size:x.size,
+      webkitRelativePath:'official_channel/'+renamed};
+  });
+  setFolder(indexLocalFolder(uniquified,{
+    peerId:'-10042',profile:'official_channel'
+  }));
+  const beforeUniquified=completed.length;
+  await backupAll();
+  assert.equal(getResult().complete,true);
+  assert.equal(getResult().diskFound,3);
+  assert.equal(getResult().diskPreflightMatched,3);
+  assert.equal(getResult().done,0,'Firefox suffixed copies are existing media');
+  assert.equal(completed.length,beforeUniquified);
+
+  // Prevent mass redownload of an unrelated folder containing plausible JKL
+  // filenames: preflight must reject it before the FIRST GM_download call.
+  storage.clear();
+  const unrelated=Array.from({length:80},(_,i)=>{
+    const name='ancien_nom - 2025-01-02_03-04-05 - video_'+i+'.mp4';
+    return {name,size:600,webkitRelativePath:'ancien_nom/'+name};
+  });
+  setFolder(indexLocalFolder(unrelated,{
+    peerId:'-10042',profile:'official_channel'
+  }));
+  const beforeUnrelated=completed.length;
+  await backupAll();
+  assert.equal(getResult().complete,false);
+  assert.equal(getResult().done,0);
+  assert.equal(getResult().diskPreflightMatched,0);
+  assert.match(getResult().detail,/Téléchargements bloqués pour éviter les doublons/);
+  assert.equal(completed.length,beforeUnrelated,
+    'never download until local folder is validated');
+  clearFolder();
 
   // A browser restart during an active download must NEVER claim completion.
   resetResult();
