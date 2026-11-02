@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JKL Telegram Backup
 // @namespace    https://github.com/JKL93sang
-// @version      0.2.7
+// @version      0.2.8
 // @description  Telegram WebK: telechargement unitaire ou selection multiple de photos/videos avec noms lisibles.
 // @author       JKL
 // @match        https://web.telegram.org/*
@@ -19,7 +19,7 @@
 // ==/UserScript==
 
 /*
- * v0.2.7 - WebK only, no external services.
+ * v0.2.8 - WebK only, no external services.
  * SOLO / selection: fetch original media Blob, GM_download into profile folder.
  * ALL: paginate the accessible history with Telegram's getHistory media filters.
  * Sequential queue, explicit stop, progress, persistent success ledger/resume.
@@ -537,13 +537,34 @@
 
 
   function normalizedDiskName(value) {
-    return String(value ?? '').normalize('NFKC').toLowerCase();
+    return String(value ?? '').normalize('NFKC').trim().toLowerCase();
   }
 
-  // The directory picker exposes file names, lengths and relative paths,
-  // without granting arbitrary filesystem read or write access.
-  // Select EITHER the current profile folder (Profile/file.jpg) OR its
-  // immediate parent (Downloads/Profile/file.jpg). Ignore unrelated peers.
+  // JKL file names encode Telegram's message date and original media name.
+  // Browsers may insert " (1)" before the extension when an earlier copy
+  // exists. Profile titles can also have changed between script versions.
+  // Match exact names first, or match the complete date + original suffix
+  // inside the folder explicitly chosen by the user.
+  function diskCanonicalName(name) {
+    return String(name).replace(/ \([1-9]\d*\)(?=\.[^.]+$)/, '');
+  }
+
+  function diskMediaSuffix(name) {
+    const result = normalizedDiskName(name).match(
+      /( - \d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2} - .+)$/
+    );
+    return result ? result[1] : null;
+  }
+
+  function addDiskCandidate(map, key, record) {
+    if (!key) return;
+    const group = map.get(key) || [];
+    group.push(record);
+    map.set(key, group);
+  }
+
+  // Folder selection is explicit and temporary. We never touch the contents:
+  // Firefox exposes only filenames, byte lengths and relative paths.
   function indexLocalFolder(files, ctx) {
     if (!ctx || ctx.peerId == null || !ctx.profile) {
       throw new Error('Conversation Telegram non identifiée pour le dossier.');
@@ -559,56 +580,76 @@
       throw new Error('Choisis un dossier entier, pas seulement des fichiers.');
     }
     const ownRoot = normalizedDiskName(root) === normalizedDiskName(ctx.profile);
-    const index = new Map();
-    let relevant = 0, relatedFolder = ownRoot;
+    const directFiles = [], profileFiles = [];
     for (const file of selected) {
-      const parts = String(file?.webkitRelativePath || '')
-        .replace(/\\/g, '/').split('/');
+      const path = String(file?.webkitRelativePath || '').replace(/\\/g, '/');
+      const parts = path.split('/');
       if (parts[0] !== root) continue;
-      let filename = null;
-      if (ownRoot && parts.length === 2) {
-        filename = parts[1];
-      } else if (!ownRoot && parts.length === 3 &&
-          normalizedDiskName(parts[1]) === normalizedDiskName(ctx.profile)) {
-        relatedFolder = true;
-        filename = parts[2];
-      }
-      if (!filename || filename === '.' || filename === '..') continue;
-      const size = Number(file.size);
+      const size = Number(file?.size);
       if (!Number.isFinite(size) || size <= 0) continue;
-      index.set(normalizedDiskName(filename), size);
-      relevant++;
+      if (parts.length === 2 && parts[1]) {
+        directFiles.push({path, name:parts[1], size});
+      }
+      if (parts.length === 3 && parts[2] &&
+          normalizedDiskName(parts[1]) === normalizedDiskName(ctx.profile)) {
+        profileFiles.push({path, name:parts[2], size});
+      }
     }
-    if (!relatedFolder) {
-      throw new Error('Le dossier choisi ne contient pas le sous-dossier "' +
-        ctx.profile + '". Choisis ce dossier directement ou son dossier parent.');
+    // Prefer a direct profile folder, or the profile subfolder in a parent.
+    // For renamed/moved profile folders, allow the chosen folder itself only
+    // if it contains recognizable JKL filenames; the Telegram-history
+    // preflight must then independently confirm their identity.
+    const ownFiles = ownRoot ? directFiles : profileFiles;
+    const legacyDirect = !ownRoot && profileFiles.length === 0 &&
+      directFiles.some(f => diskMediaSuffix(diskCanonicalName(f.name)));
+    const relevantFiles = legacyDirect ? directFiles : ownFiles;
+    if (!relevantFiles.length) {
+      throw new Error('Aucun fichier de ce profil reconnu dans "' + root +
+        '". Choisis directement son dossier ou le dossier parent contenant "' +
+        ctx.profile + '". Aucun téléchargement lancé.');
+    }
+    const index = new Map(), suffixIndex = new Map();
+    let relevant = 0;
+    for (const file of relevantFiles) {
+      const record = {path:file.path, size:file.size};
+      const exact = normalizedDiskName(file.name);
+      addDiskCandidate(index, exact, record);
+      const base = diskCanonicalName(file.name);
+      if (base !== file.name) {
+        // Uniquified downloads are not necessarily the same media, so
+        // require the complete date/name suffix and correct document size.
+        addDiskCandidate(suffixIndex, diskMediaSuffix(base), record);
+      }
+      addDiskCandidate(suffixIndex, diskMediaSuffix(file.name), record);
+      relevant++;
     }
     return {
       ctx:{peerId:ctx.peerId, threadId:ctx.threadId},
-      profile:ctx.profile,
-      root,
-      ownRoot,
-      index,
-      totalFiles:selected.length,
-      relevant,
-      sessionDownloaded:new Set()
+      profile:ctx.profile, root, ownRoot:ownRoot && !legacyDirect,
+      legacyDirect, index, suffixIndex,
+      totalFiles:selected.length, relevant, sessionDownloaded:new Set()
     };
   }
 
-  function findExistingDiskFile(folder, ctx, name, info) {
+  function findExistingDiskFile(folder, ctx, name, info, usedFiles) {
     if (!folder || !sameBackupChat(folder.ctx, ctx) ||
         folder.profile !== ctx.profile) return false;
-    const actual = folder.index.get(normalizedDiskName(name));
-    if (!Number.isFinite(actual) || actual <= 0) return false;
-    // Telegram document byte lengths are reliable; reject truncated matches.
-    // Photo-size metadata can describe a rendition; require nonzero for photos.
-    if (info.media?._ === 'document') {
-      const declared = Number(info.media.size);
-      if (Number.isFinite(declared) && declared > 0 && actual !== declared) {
-        return false;
+    const exact = folder.index.get(normalizedDiskName(name)) || [];
+    const suffix = folder.suffixIndex.get(diskMediaSuffix(name)) || [];
+    const visited = new Set();
+    for (const file of [...exact, ...suffix]) {
+      if (visited.has(file.path) || usedFiles?.has(file.path)) continue;
+      visited.add(file.path);
+      if (!Number.isFinite(file.size) || file.size <= 0) continue;
+      if (info.media?._ === 'document') {
+        const declared = Number(info.media.size);
+        if (Number.isFinite(declared) && declared > 0 &&
+            file.size !== declared) continue;
       }
+      usedFiles?.add(file.path);
+      return true;
     }
-    return true;
+    return false;
   }
 
   function selectedFolderFor(ctx) {
@@ -621,8 +662,78 @@
     const folder = selectedFolderFor(ctx);
     return folder
       ? 'Dossier contrôlé : ' + folder.root +
-        ' · ' + folder.relevant + ' fichier(s) du profil'
+        ' · ' + folder.relevant + ' fichier(s) indexés' +
+        (folder.legacyDirect ? ' (dossier renommé : vérification requise)' : '')
       : 'Dossier local : non sélectionné (reprise par historique uniquement).';
+  }
+
+  // Never start downloading hundreds of purportedly absent files when the
+  // user selected a pre-existing folder and the matching strategy is wrong.
+  // This read-only pass confirms that the folder corresponds to the open
+  // Telegram history before the first GM_download invocation.
+  async function preflightLocalFolder(ctx, job) {
+    const folder = job.folder;
+    if (!folder) return;
+    const seen = new Set(), usedFiles = new Set();
+    let found = 0, matched = 0, inspectedPages = 0;
+    for (const filter of HISTORY_FILTERS) {
+      let cursor = null, stalled = 0, reachedEnd = false;
+      for (let n = 0; n < 20000; n++) {
+        if (job.cancelled) return;
+        assertCurrentChat(ctx);
+        job.stage = 'Vérification du dossier local · aucun téléchargement';
+        job.detail = 'Page ' + (n + 1) + ' · ' + matched +
+          ' correspondance(s) sur ' + found + ' média(s) détecté(s)';
+        bulkStatus(job);
+        const data = await fetchMediaPage(ctx, filter, cursor);
+        inspectedPages++;
+        if (data.rawCount !== data.messages.length) {
+          throw new Error('Vérification locale : page Telegram incomplète.');
+        }
+        for (const msg of data.messages) {
+          if (job.cancelled) return;
+          const info = getMediaInfo(msg);
+          if (!info) continue;
+          const key = mediaIdentity(msg, info, ctx);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          found++;
+          const name = fileName(msg, info, ctx.profile);
+          if (findExistingDiskFile(folder, ctx, name, info, usedFiles)) matched++;
+        }
+        if (data.isTopEnd) { reachedEnd = true; break; }
+        if (!data.next ||
+            (cursor && String(data.next.mid) === String(cursor.mid) &&
+             String(data.next.peerId) === String(cursor.peerId))) {
+          if (++stalled >= 2) {
+            throw new Error('Vérification locale : pagination bloquée.');
+          }
+        } else { cursor = data.next; stalled = 0; }
+        await delay(HISTORY_PAGE_GAP_MS);
+      }
+      if (!reachedEnd) {
+        if (job.cancelled) return;
+        throw new Error('Vérification locale : historique incomplet.');
+      }
+    }
+    job.diskPreflightMatched = matched;
+    job.diskPreflightFound = found;
+    job.diskPreflightPages = inspectedPages;
+    // A handful of hits among hundreds of files almost certainly indicates
+    // a folder-identity or filename mismatch, not hundreds of missing files.
+    const comparable = Math.min(found, folder.relevant);
+    const needed = comparable >= 10 ? Math.max(2, Math.ceil(comparable * 0.20)) : 1;
+    if (matched < needed) {
+      throw new Error('Vérification du dossier : ' + matched + '/' +
+        folder.relevant + ' fichier(s) reconnus parmi ' + found +
+        ' média(s) Telegram (' + inspectedPages + ' pages). ' +
+        'Téléchargements bloqués pour éviter les doublons. ' +
+        'Vérifie le dossier choisi et ses noms, ou retire-le pour ' +
+        'reprendre sans comparaison locale.');
+    }
+    job.detail = 'Dossier validé : ' + matched + '/' + folder.relevant +
+      ' fichier(s) trouvés · début des téléchargements manquants.';
+    bulkStatus(job);
   }
 
   function ledgerKey(ctx) {
@@ -825,6 +936,8 @@
       'Enregistrés : ' + job.done + ' | Déjà faits : ' + job.skipped,
       'Erreurs : ' + job.errors + ' | Filtres terminés : ' + job.finished + '/' + HISTORY_FILTERS.length,
       ...(job.folder ? [
+        'Pré-vérification : ' + job.diskPreflightMatched + '/' +
+          job.diskPreflightFound + ' médias correspondants',
         'Sur disque : ' + job.diskFound +
           ' | Absents malgré historique : ' + job.missingFromDisk,
         'Dossier vérifié : ' + job.folder.root + ' (' +
@@ -864,13 +977,15 @@
       ctx, cancelled:false, stage:'Préparation du scan…', detail:'',
       pages:0, found:0, done:0, skipped:0, errors:0,
       finished:0, seen:new Set(), ledger, ledgerSafe:true, complete:false,
-      diskFound:0, missingFromDisk:0, folder, diskMatchedNames:new Set(),
+      diskFound:0, missingFromDisk:0, folder, diskMatchedFiles:new Set(),
+      diskPreflightMatched:0, diskPreflightFound:0, diskPreflightPages:0,
       failures: []
     };
     running = true;
     persistBackupState(job, true);
     bulkStatus(job);
     try {
+      if (folder) await preflightLocalFolder(ctx, job);
       // Two searches are intentional: PhotoVideo for media and Document for
       // images/videos sent as original files, plus GIFs, with ID deduplication.
       for (const filter of HISTORY_FILTERS) {
@@ -912,13 +1027,10 @@
             job.found++;
             if (folder) {
               const name = fileName(msg, info, ctx.profile);
-              const diskNameKey = normalizedDiskName(name);
-              // The legacy filename convention may give two messages the
-              // same filename (same second + same original media name).
-              // A single file on disk must never prove BOTH are saved.
-              if (!job.diskMatchedNames.has(diskNameKey) &&
-                  findExistingDiskFile(folder, ctx, name, info)) {
-                job.diskMatchedNames.add(diskNameKey);
+              // Reserve the actual file path, not just its expected name:
+              // "file.mp4" and "file (1).mp4" can be separate downloads.
+              if (findExistingDiskFile(folder, ctx, name, info,
+                  job.diskMatchedFiles)) {
                 job.diskFound++;
                 job.skipped++;
                 // Recover old existing media even if a previous browser ledger
@@ -1124,7 +1236,7 @@
   function diagnostics() {
     const yes = x => x ? 'OK' : 'INDISPONIBLE';
     return [
-      'JKL Telegram Backup v0.2.7',
+      'JKL Telegram Backup v0.2.8',
       'URL : ' + location.href,
       'WebK : ' + yes(isWebK()),
       'Moteur renommage : ' + yes(typeof page.appDownloadManager?.downloadMedia === 'function'),
@@ -1212,7 +1324,7 @@
       '<button type="button" id="jkl-tg-toggle" aria-expanded="false"',
       ' style="cursor:grab;touch-action:none;user-select:none;border:1px solid #6faec9;background:#183d54;',
       'color:#fff;padding:8px 13px;border-radius:20px;font:600 13px system-ui,sans-serif">',
-      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.7</small>',
+      '↓ JKL Telegram Backup <small style="opacity:.75">v0.2.8</small>',
       '<span id="jkl-tg-state-chip" style="display:inline-block;margin-left:8px;',
       'padding:3px 7px;border:1px solid #617d8d;border-radius:14px;',
       'font:600 11px system-ui,sans-serif;vertical-align:middle">',
@@ -1243,6 +1355,9 @@
       '<div id="jkl-tg-folder-status" style="font-size:11px;',
       'color:#b8d5e7;margin-bottom:9px;white-space:pre-line">',
       'Dossier local : non sélectionné.</div>',
+      '<button id="jkl-tg-folder-clear" type="button" style="cursor:pointer;padding:7px;',
+      'border:1px solid #637f90;border-radius:7px;background:transparent;',
+      'color:#eaf4ff;margin-left:5px;margin-bottom:7px">Retirer dossier</button>',
       '<button id="jkl-tg-all" type="button" style="cursor:pointer;padding:8px;',
       'border:0;border-radius:7px;background:#168064;color:white;margin-right:6px">',
       'Tout récupérer</button>',
@@ -1278,6 +1393,7 @@
     const bulkLabel = root.querySelector('#jkl-tg-bulk-status');
     const bulkProgress = root.querySelector('#jkl-tg-bulk-progress');
     const folderButton = root.querySelector('#jkl-tg-folder');
+    const folderClear = root.querySelector('#jkl-tg-folder-clear');
     const folderInput = root.querySelector('#jkl-tg-folder-input');
     const folderStatus = root.querySelector('#jkl-tg-folder-status');
     let pickerTarget = null;
@@ -1309,6 +1425,7 @@
       const active = Boolean(bulkJob);
       allButton.disabled = active;
       folderButton.disabled = active;
+      folderClear.disabled = active;
       stopButton.disabled = !active || bulkJob?.cancelled;
       bulkLabel.textContent = visibleJob(job) ? bulkText(job) :
         (reportForOpenChat() || 'Prêt : ouvre un canal puis clique sur Tout récupérer.');
@@ -1365,6 +1482,12 @@
       if (!isWebK()) return toast('Ouvre Telegram WebK pour utiliser ce mode.', true);
       await saveSelection(event.currentTarget);
       refresh();
+    });
+    folderClear.addEventListener('click', () => {
+      if (running || bulkJob) return;
+      localFolderIndex = null;
+      renderBulkProgress?.(lastBulkResult);
+      toast('Contrôle du dossier désactivé : reprise par historique uniquement.');
     });
     folderButton.addEventListener('click', () => {
       if (running || bulkJob) return toast('Attends la fin du backup.', true);
@@ -1431,8 +1554,8 @@
         toast('Diagnostic affiché dans la console (F12).', true);
       }
     });
-    document.documentElement.dataset.jklTelegramBackup = '0.2.7';
-    console.info(PREFIX, 'Panneau v0.2.7 initialisé. '+ diagnostics());
+    document.documentElement.dataset.jklTelegramBackup = '0.2.8';
+    console.info(PREFIX, 'Panneau v0.2.8 initialisé. '+ diagnostics());
   }
 
   document.addEventListener('contextmenu', e => captureTarget(e.target), true);
@@ -1462,7 +1585,7 @@
     mountDock();
     observer.observe(document.body, { childList: true, subtree: true });
     document.querySelectorAll('#bubble-contextmenu,.selection-wrapper').forEach(process);
-    console.info(`${PREFIX} v0.2.7 pret (WebK).`);
+    console.info(`${PREFIX} v0.2.8 pret (WebK).`);
   };
   if (document.body) start();
   else document.addEventListener('DOMContentLoaded', start, { once: true });
